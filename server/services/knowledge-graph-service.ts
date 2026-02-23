@@ -462,7 +462,7 @@ export class KnowledgeGraphService {
     return created;
   }
 
-  private async ensureEdge(edge: InsertKnowledgeEdge): Promise<void> {
+  async ensureEdge(edge: InsertKnowledgeEdge): Promise<void> {
     const [existing] = await this.database
       .select()
       .from(knowledgeEdges)
@@ -485,6 +485,143 @@ export class KnowledgeGraphService {
     };
 
     await this.database.insert(knowledgeEdges).values(payload);
+  }
+
+  // ============================================================================
+  // ENRICHMENT METHODS — Used by KnowledgeEnrichmentService at runtime
+  // ============================================================================
+
+  /**
+   * Merge new attributes into an existing node's JSONB attributes.
+   * For array attributes, deduplicates by appending only new values.
+   * For scalar attributes, overwrites with new value.
+   */
+  async mergeNodeAttributes(
+    type: string,
+    label: string,
+    newAttributes: Record<string, any>,
+  ): Promise<KnowledgeNode | undefined> {
+    if (this.fallbackMode) return undefined;
+    await this.ensureSeeded();
+
+    const [existing] = await this.database
+      .select()
+      .from(knowledgeNodes)
+      .where(
+        and(
+          eq(knowledgeNodes.type, type),
+          eq(knowledgeNodes.label, label),
+        ),
+      )
+      .limit(1);
+
+    if (!existing) return undefined;
+
+    const current = (existing.attributes ?? {}) as Record<string, any>;
+    const merged = { ...current };
+
+    for (const [key, value] of Object.entries(newAttributes)) {
+      if (Array.isArray(value) && Array.isArray(merged[key])) {
+        // Deduplicate array merge — case-insensitive for strings
+        const existingSet = new Set(
+          merged[key].map((v: any) => (typeof v === "string" ? v.toLowerCase() : JSON.stringify(v))),
+        );
+        const newItems = value.filter((v: any) => {
+          const normalized = typeof v === "string" ? v.toLowerCase() : JSON.stringify(v);
+          return !existingSet.has(normalized);
+        });
+        merged[key] = [...merged[key], ...newItems];
+      } else {
+        merged[key] = value;
+      }
+    }
+
+    await this.database
+      .update(knowledgeNodes)
+      .set({ attributes: merged, updatedAt: new Date() })
+      .where(eq(knowledgeNodes.id, existing.id));
+
+    return { ...existing, attributes: merged };
+  }
+
+  /**
+   * Increment an edge's weight (or create the edge if it doesn't exist).
+   * Used for tracking how often an industry→analysisType pair succeeds.
+   */
+  async incrementEdgeWeight(
+    sourceId: string,
+    targetId: string,
+    relationship: string,
+    increment: number = 1,
+    mergeAttributes?: Record<string, any>,
+  ): Promise<void> {
+    if (this.fallbackMode) return;
+    await this.ensureSeeded();
+
+    const [existing] = await this.database
+      .select()
+      .from(knowledgeEdges)
+      .where(
+        and(
+          eq(knowledgeEdges.sourceId, sourceId),
+          eq(knowledgeEdges.targetId, targetId),
+          eq(knowledgeEdges.relationship, relationship),
+        ),
+      )
+      .limit(1);
+
+    if (existing) {
+      const updatedAttrs = mergeAttributes
+        ? { ...((existing.attributes ?? {}) as Record<string, any>), ...mergeAttributes }
+        : existing.attributes;
+
+      await this.database
+        .update(knowledgeEdges)
+        .set({
+          weight: (existing.weight || 1) + increment,
+          attributes: updatedAttrs,
+          updatedAt: new Date(),
+        })
+        .where(eq(knowledgeEdges.id, existing.id));
+    } else {
+      await this.ensureEdge({
+        sourceId,
+        targetId,
+        relationship,
+        weight: increment,
+        attributes: { createdByEnrichment: true, ...mergeAttributes },
+      });
+    }
+  }
+
+  /**
+   * Upsert a node: creates if absent, merges attributes if it already exists.
+   * Preferred over getOrCreateNode() when enriching existing knowledge.
+   */
+  async getOrCreateNodeWithMerge(node: InsertKnowledgeNode): Promise<KnowledgeNode> {
+    if (this.fallbackMode) {
+      return {
+        id: node.id ?? nanoid(),
+        type: node.type,
+        label: node.label,
+        summary: node.summary ?? null,
+        attributes: node.attributes ?? {},
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      } as KnowledgeNode;
+    }
+    await this.ensureSeeded();
+
+    // Try merging into existing node first
+    const existing = await this.mergeNodeAttributes(
+      node.type,
+      node.label,
+      (node.attributes ?? {}) as Record<string, any>,
+    );
+    if (existing) return existing;
+
+    // Node doesn't exist — create it
+    return this.getOrCreateNode(node);
   }
 
   private normalize(value: string): string {

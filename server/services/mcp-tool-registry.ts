@@ -1620,6 +1620,40 @@ export function registerCoreTools(): void {
       }
     },
     // ========================================
+    // KNOWLEDGE ENRICHMENT TOOL
+    // Enriches user profile and knowledge graph from completed project results
+    // ========================================
+    {
+      name: 'knowledge_enrichment',
+      description: 'Enriches user profile and knowledge graph from completed project results. Tracks analysis effectiveness, question patterns, column schemas, and industry use cases.',
+      service: 'KnowledgeEnrichmentService',
+      permissions: ['enrich_knowledge', 'update_knowledge_graph'],
+      category: 'ra_research',
+      agentAccess: ['research_agent', 'project_manager'],
+      capabilities: ['knowledge.enrich', 'profile.update', 'pattern.track', 'effectiveness.measure'],
+      inputTypes: ['project/results', 'analysis/metadata'],
+      outputTypes: ['enrichment/result'],
+      complexity: 'low',
+      inputSchema: {
+        projectId: 'string (required)',
+        userId: 'string (required)',
+        industry: 'string',
+        analysisTypes: 'array of strings',
+        userGoals: 'array of strings',
+        userQuestions: 'array of strings',
+        insightCount: 'number',
+        qualityScore: 'number',
+        columnNames: 'array of strings',
+        executionTimeSeconds: 'number',
+        questionAnswerMapping: 'array of { questionId, questionText, recommendedAnalyses } (optional)'
+      },
+      outputSchema: {
+        userProfileUpdates: 'array of strings (descriptions of updates)',
+        knowledgeGraphUpdates: 'array of strings (descriptions of updates)',
+        errors: 'array of strings'
+      }
+    },
+    // ========================================
     // RESEARCH AGENT TOOLS (Internet Research, Template Creation)
     // ========================================
     {
@@ -3224,6 +3258,35 @@ export async function executeTool(
             result = createPlaceholderResult(executionContext, toolName);
         }
         break;
+
+      // ========================================
+      // KNOWLEDGE ENRICHMENT TOOL
+      // ========================================
+      case 'knowledge_enrichment': {
+        try {
+          const { KnowledgeEnrichmentService } = await import('./knowledge-enrichment-service');
+          const enrichmentService = new KnowledgeEnrichmentService();
+          const enrichResult = await enrichmentService.enrich(input);
+          result = {
+            executionId: executionContext.executionId,
+            toolId: toolName,
+            status: 'success',
+            result: enrichResult,
+            metrics: { duration: 100, resourcesUsed: { cpu: 5, memory: 30, storage: 10 }, cost: 0 }
+          };
+        } catch (enrichErr: any) {
+          console.error('knowledge_enrichment failed:', enrichErr);
+          result = {
+            executionId: executionContext.executionId,
+            toolId: toolName,
+            status: 'error',
+            error: enrichErr.message,
+            result: null,
+            metrics: { duration: 0, resourcesUsed: { cpu: 0, memory: 0, storage: 0 }, cost: 0 }
+          };
+        }
+        break;
+      }
 
       // ========================================
       // BUSINESS DEFINITION REGISTRY TOOLS (Data Element Mapping)

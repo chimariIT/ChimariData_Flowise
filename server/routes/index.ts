@@ -34,6 +34,8 @@ import adminConsultationRouter from './admin-consultation';
 import adminConsultationPricingRouter from './admin-consultation-pricing';
 import adminServicePricingRouter from './admin-service-pricing';
 import adminBillingRouter from './admin-billing';
+import adminKnowledgeRouter from './admin-knowledge';
+import adminKnowledgeReviewRouter from './admin-knowledge-review';
 import projectSessionRouter from './project-session';
 import customJourneyRouter from './custom-journey';
 import analyzeDataRouter from './analyze-data';
@@ -101,6 +103,8 @@ router.use('/admin/consultations', adminConsultationRouter); // Admin consultati
 router.use('/admin/consultation-pricing', adminConsultationPricingRouter); // Admin consultation pricing configuration
 router.use('/admin/service-pricing', adminServicePricingRouter); // Admin service pricing configuration
 router.use('/admin/billing', adminBillingRouter); // Admin billing and pricing management (database-backed)
+router.use('/admin/knowledge', adminKnowledgeRouter); // Admin knowledge graph CRUD, stats, seeding
+router.use('/admin/knowledge/review', adminKnowledgeReviewRouter); // Admin enrichment review, pattern approval, feedback processing
 router.use('/project-session', projectSessionRouter); // Secure server-side session state management
 router.use('/custom-journey', customJourneyRouter); // Custom "Build Your Own" journey capability selection
 router.use('/analyze-data', ensureAuthenticated, analyzeDataRouter); // Analysis with audience formatting

@@ -29,6 +29,7 @@ import {
   Tag,
   Database,
   ShieldAlert,
+  Brain,
 } from "lucide-react";
 import AdminDashboard from "./admin-dashboard";
 import AgentManagement from "./agent-management";
@@ -44,6 +45,7 @@ import CampaignManagement from "./campaign-management";
 import UserManagement from "./user-management";
 import ErrorTracking from "./error-tracking";
 import DatabaseOptimization from "./database-optimization";
+import KnowledgeManagement from "./knowledge-management";
 
 interface AdminLayoutProps {
   user?: any;
@@ -265,6 +267,10 @@ export default function AdminLayout({ user }: AdminLayoutProps) {
               <Activity className="w-3 h-3" />
               State Inspector
             </TabsTrigger>
+            <TabsTrigger value="knowledge" className="flex items-center gap-1 text-xs">
+              <Brain className="w-3 h-3" />
+              Knowledge
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="dashboard">
@@ -317,6 +323,10 @@ export default function AdminLayout({ user }: AdminLayoutProps) {
 
           <TabsContent value="state-inspector">
             <ProjectStateInspector />
+          </TabsContent>
+
+          <TabsContent value="knowledge">
+            <KnowledgeManagement />
           </TabsContent>
         </Tabs>
       </div>

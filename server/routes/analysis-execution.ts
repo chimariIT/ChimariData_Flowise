@@ -23,6 +23,7 @@ import { getBillingService } from '../services/billing/unified-billing-service';
 import { requireAnyFeature, GATED_FEATURES } from '../middleware/feature-gate';
 import type { CostBreakdown } from '@shared/schema';
 import type { FeatureComplexity, JourneyType } from '@shared/canonical-types';
+import { resolvePipelineIndustry } from '../services/pipeline-context';
 
 const router = Router();
 
@@ -544,6 +545,39 @@ router.post('/execute', ensureAuthenticated, async (req, res) => {
     } else {
       console.warn(`⚠️ Project ${projectId} not found, skipping artifact generation`);
     }
+
+    // ✅ Knowledge Enrichment: enrich user profile + knowledge graph from completed project
+    setImmediate(async () => {
+      try {
+        const { KnowledgeEnrichmentService } = await import('../services/knowledge-enrichment-service');
+        const enrichmentService = new KnowledgeEnrichmentService();
+
+        const { industry: enrichIndustry } = resolvePipelineIndustry(
+          (project as any)?.journeyProgress
+        );
+
+        const enrichResult = await enrichmentService.enrich({
+          projectId,
+          userId,
+          industry: enrichIndustry,
+          analysisTypes: results.analysisTypes || [],
+          userGoals: ((project as any)?.journeyProgress?.userGoals || []).map((g: any) => typeof g === 'string' ? g : g.text || ''),
+          userQuestions: ((project as any)?.journeyProgress?.questions || []).map((q: any) => typeof q === 'string' ? q : q.text || ''),
+          insightCount: results.insights?.length || 0,
+          qualityScore: results.summary?.qualityScore || 0,
+          columnNames: (results.metadata as any)?.columnNames || [],
+          executionTimeSeconds: parseFloat(results.summary?.executionTime || '0'),
+          questionAnswerMapping: results.questionAnswerMapping
+        });
+
+        console.log(`📚 [Knowledge Enrichment] User profile: ${enrichResult.userProfileUpdates.length} updates, KB: ${enrichResult.knowledgeGraphUpdates.length} updates`);
+        if (enrichResult.errors.length > 0) {
+          console.warn(`⚠️ [Knowledge Enrichment] ${enrichResult.errors.length} non-fatal errors:`, enrichResult.errors.slice(0, 3));
+        }
+      } catch (enrichError) {
+        console.error('❌ [Knowledge Enrichment] Failed (non-blocking):', enrichError);
+      }
+    });
 
     // ✅ Update journey state - mark analysis execution as complete
     try {
