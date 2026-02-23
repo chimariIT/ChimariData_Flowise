@@ -2,7 +2,17 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "dev",
+      "name": "dev-server",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--import", "tsx", "server/index.ts"],
+      "port": 5000,
+      "env": {
+        "NODE_ENV": "development",
+        "VITE_SEPARATED": "true"
+      }
+    },
+    {
+      "name": "dev-client",
       "runtimeExecutable": "node",
       "runtimeArgs": ["node_modules/vite/bin/vite.js", "--port", "5173"],
       "port": 5173

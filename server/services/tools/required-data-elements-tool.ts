@@ -364,23 +364,73 @@ export class RequiredDataElementsTool {
             const results = await Promise.race([enrichmentPromise, timeoutPromise]);
 
             let enrichedCount = 0;
+            let validatedCount = 0;
             for (const result of results) {
                 if (result.status === 'fulfilled' && result.value) {
                     const { element, lookupResult } = result.value;
                     if (lookupResult.found && lookupResult.definition) {
                         const def = lookupResult.definition;
-                        element.calculationDefinition = {
-                            calculationType: (def.calculationType as any) || 'derived',
-                            formula: {
-                                businessDescription: def.businessDescription || '',
-                                componentFields: (def.componentFields as string[]) || [],
-                                aggregationMethod: ((def.aggregationMethod || 'custom') as any)
-                            },
-                            definitionConfidence: lookupResult.confidence,
-                            notes: `From registry: ${lookupResult.source} (${Math.round(lookupResult.confidence * 100)}% confidence)`
-                        };
-                        enrichedCount++;
-                        console.log(`   ✅ Enriched: "${element.elementName}" with ${def.calculationType} definition (${lookupResult.source})`);
+                        const isGrounded = !!(element as any).groundedFromDefinition;
+
+                        if (isGrounded) {
+                            // VALIDATION MODE: Compare DS Agent grounding with registry definition
+                            // Keep grounded componentFields if they reference actual schema columns;
+                            // but adopt registry's calculationType and businessDescription for correctness
+                            const groundedFields = element.calculationDefinition?.formula?.componentFields || [];
+                            const schemaColumns = input.datasetMetadata?.schema ? Object.keys(input.datasetMetadata.schema) : [];
+                            const schemaSet = new Set(schemaColumns.map(c => c.toLowerCase()));
+
+                            // Check how many grounded fields are actual schema columns
+                            const validGroundedFields = groundedFields.filter((f: string) => schemaSet.has(f.toLowerCase()));
+                            const groundingAccuracy = groundedFields.length > 0 ? validGroundedFields.length / groundedFields.length : 0;
+
+                            if (groundingAccuracy >= 0.5) {
+                                // Grounding looks good — keep resolved columns, but enrich metadata
+                                element.calculationDefinition = {
+                                    ...element.calculationDefinition,
+                                    calculationType: (def.calculationType as any) || element.calculationDefinition?.calculationType || 'derived',
+                                    formula: {
+                                        ...element.calculationDefinition?.formula,
+                                        businessDescription: def.businessDescription || element.calculationDefinition?.formula?.businessDescription || '',
+                                        componentFields: validGroundedFields.length > 0 ? groundedFields : (def.componentFields as string[]) || [],
+                                        aggregationMethod: ((def.aggregationMethod || element.calculationDefinition?.formula?.aggregationMethod || 'custom') as any)
+                                    },
+                                    definitionConfidence: lookupResult.confidence,
+                                    notes: `DS-grounded + registry-validated (${Math.round(groundingAccuracy * 100)}% fields verified): ${lookupResult.source}`
+                                };
+                                validatedCount++;
+                                console.log(`   ✅ Validated grounding: "${element.elementName}" (${validGroundedFields.length}/${groundedFields.length} fields confirmed in schema)`);
+                            } else {
+                                // Grounding was bad — replace with registry definition
+                                element.calculationDefinition = {
+                                    calculationType: (def.calculationType as any) || 'derived',
+                                    formula: {
+                                        businessDescription: def.businessDescription || '',
+                                        componentFields: (def.componentFields as string[]) || [],
+                                        aggregationMethod: ((def.aggregationMethod || 'custom') as any)
+                                    },
+                                    definitionConfidence: lookupResult.confidence,
+                                    notes: `Registry override (DS grounding had ${Math.round(groundingAccuracy * 100)}% accuracy): ${lookupResult.source}`
+                                };
+                                delete (element as any).groundedFromDefinition;
+                                enrichedCount++;
+                                console.log(`   🔄 Corrected: "${element.elementName}" — DS grounding inaccurate (${validGroundedFields.length}/${groundedFields.length} valid), using registry definition`);
+                            }
+                        } else {
+                            // Normal enrichment for non-grounded elements
+                            element.calculationDefinition = {
+                                calculationType: (def.calculationType as any) || 'derived',
+                                formula: {
+                                    businessDescription: def.businessDescription || '',
+                                    componentFields: (def.componentFields as string[]) || [],
+                                    aggregationMethod: ((def.aggregationMethod || 'custom') as any)
+                                },
+                                definitionConfidence: lookupResult.confidence,
+                                notes: `From registry: ${lookupResult.source} (${Math.round(lookupResult.confidence * 100)}% confidence)`
+                            };
+                            enrichedCount++;
+                            console.log(`   ✅ Enriched: "${element.elementName}" with ${def.calculationType} definition (${lookupResult.source})`);
+                        }
                     } else {
                         console.log(`   ⚠️ No definition found for: "${element.elementName}"`);
                     }
@@ -388,7 +438,7 @@ export class RequiredDataElementsTool {
                     console.warn(`   ⚠️ Enrichment failed for an element:`, result.reason?.message || result.reason);
                 }
             }
-            console.log(`📚 [Data Elements Tool] Enriched ${enrichedCount}/${requiredDataElements.length} elements with business definitions`);
+            console.log(`📚 [Data Elements Tool] Enriched ${enrichedCount}, validated ${validatedCount} of ${requiredDataElements.length} elements with business definitions`);
         } catch (enrichError) {
             console.warn(`⚠️ [Data Elements Tool] Business definition enrichment failed (non-blocking):`, enrichError);
             // Continue without enrichment - non-blocking error
@@ -698,6 +748,7 @@ export class RequiredDataElementsTool {
 
             let enrichedCount = 0;
             for (const element of document.requiredDataElements) {
+                const isGrounded = !!(element as any).groundedFromDefinition;
                 const calcType = element.calculationDefinition?.calculationType;
                 if (calcType && ['derived', 'composite', 'aggregated', 'grouped'].includes(calcType)) {
                     const lookupResult = await businessDefinitionRegistry.lookupDefinition(
@@ -713,9 +764,35 @@ export class RequiredDataElementsTool {
                             { industry: enrichmentIndustry }
                         );
 
-                        // Replace abstract componentFields with resolved actual columns
+                        // Resolve registry-enriched columns
                         const resolved = enriched.resolvedComponentFields.filter(f => f.resolvedColumn);
-                        if (resolved.length > 0 && element.calculationDefinition?.formula) {
+
+                        if (isGrounded && element.calculationDefinition?.formula) {
+                            // VALIDATION: Compare DS Agent grounding with registry enrichment
+                            const groundedFields = element.calculationDefinition.formula.componentFields || [];
+                            const registryFields = resolved.map(f => f.resolvedColumn!);
+                            const schemaSet = new Set(Object.keys(dataset.schema).map(c => c.toLowerCase()));
+
+                            // Validate grounded fields exist in schema
+                            const validCount = groundedFields.filter((f: string) => schemaSet.has(f.toLowerCase())).length;
+                            const groundingAccuracy = groundedFields.length > 0 ? validCount / groundedFields.length : 0;
+
+                            if (groundingAccuracy >= 0.5 && validCount >= registryFields.length) {
+                                // DS Agent grounding is good — keep it but add enrichment metadata
+                                element.calculationDefinition.notes =
+                                    `DS-grounded (validated): ${groundedFields.map((f: string) => `"${f}"`).join(', ')}`;
+                                console.log(`✅ [DE Phase 2] Validated grounding: "${element.elementName}" (${validCount}/${groundedFields.length} confirmed)`);
+                            } else if (resolved.length > 0) {
+                                // Registry enrichment found better mappings — override
+                                element.calculationDefinition.formula.componentFields = registryFields;
+                                element.calculationDefinition.notes =
+                                    `Registry-corrected (was ${validCount}/${groundedFields.length} valid): ${resolved.map(f => `${f.abstractName}→${f.resolvedColumn} (${f.role})`).join(', ')}`;
+                                delete (element as any).groundedFromDefinition;
+                                enrichedCount++;
+                                console.log(`🔄 [DE Phase 2] Corrected: "${element.elementName}" — registry enrichment has ${registryFields.length} valid columns vs DS grounding ${validCount}/${groundedFields.length}`);
+                            }
+                        } else if (resolved.length > 0 && element.calculationDefinition?.formula) {
+                            // Normal enrichment for non-grounded elements
                             element.calculationDefinition.formula.componentFields =
                                 resolved.map(f => f.resolvedColumn!);
                             element.calculationDefinition.notes =

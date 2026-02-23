@@ -3024,6 +3024,40 @@ export class DataScientistAgent implements AgentHandler {
   }
 
   /**
+   * Generate human-readable pseudoCode from resolved descriptor mappings.
+   * Substitutes abstract field names with actual column-specific expressions.
+   */
+  private static generateGroundedPseudoCode(
+    formula: string,
+    resolvedMap: Map<string, { resolvedColumn: string | null; matchType: string; confidence: number; role: string }>
+  ): string {
+    const parts: string[] = [];
+    for (const [abstractName, info] of resolvedMap) {
+      if (!info.resolvedColumn) continue;
+      switch (info.matchType) {
+        case 'date_presence_indicator':
+          parts.push(`${abstractName} = COUNT(WHERE "${info.resolvedColumn}" IS NOT NULL)`);
+          break;
+        case 'count_distinct':
+          parts.push(`${abstractName} = COUNT(DISTINCT "${info.resolvedColumn}")`);
+          break;
+        case 'date_range_filter':
+          parts.push(`period = YEAR("${info.resolvedColumn}")`);
+          break;
+        case 'pattern_match_all': {
+          const cols = info.resolvedColumn.split(',').map(c => `"${c.trim()}"`).join(', ');
+          parts.push(`${abstractName} = AVG(${cols})`);
+          break;
+        }
+        default:
+          parts.push(`${abstractName} = "${info.resolvedColumn}"`);
+      }
+    }
+    if (parts.length === 0) return formula;
+    return `${formula}\n-- Grounded: ${parts.join('; ')}`;
+  }
+
+  /**
    * AI-powered inference of required data elements using ChimaridataAI
    * Uses fallback chain: Gemini → OpenAI → Claude
    * Returns structured data elements with calculation definitions
@@ -3068,6 +3102,31 @@ export class DataScientistAgent implements AgentHandler {
       ? Object.entries(datasetSchema).map(([col, info]) => `  - ${col}: ${typeof info === 'object' ? (info as any).type || 'unknown' : info}`).join('\n')
       : '  (No schema available - infer from questions and goals)';
 
+    // Schema annotations: classify columns by semantic role to help AI produce grounded elements
+    let schemaAnnotations = '';
+    if (datasetSchema) {
+      const annotations: string[] = [];
+      for (const [col, info] of Object.entries(datasetSchema)) {
+        const colLower = col.toLowerCase();
+        const colType = (typeof info === 'object' ? (info as any).type || '' : String(info)).toLowerCase();
+        if (/date|datetime|timestamp/i.test(colType)) {
+          if (/terminat|separat|end|exit|depart|last_day/i.test(colLower)) {
+            annotations.push(`  ** ${col}: Likely SEPARATION indicator (NULL = active, non-NULL = separated)`);
+          } else if (/hire|start|join|onboard/i.test(colLower)) {
+            annotations.push(`  ** ${col}: Likely HIRE/START date`);
+          } else if (/roster|report|snapshot|period|effective/i.test(colLower)) {
+            annotations.push(`  ** ${col}: Likely PERIOD/REPORT date`);
+          }
+        }
+        if (/id$|_id$|^id_/i.test(colLower)) {
+          annotations.push(`  ** ${col}: Likely IDENTIFIER column (use for COUNT DISTINCT)`);
+        }
+      }
+      if (annotations.length > 0) {
+        schemaAnnotations = '\n## Column Role Hints:\n' + annotations.join('\n') + '\n';
+      }
+    }
+
     // Generate example: prefer schema-based example (uses ACTUAL column names) over industry example
     const exampleElement = datasetSchema && Object.keys(datasetSchema).length > 0
       ? this.getSchemaBasedExampleElement(datasetSchema)
@@ -3108,7 +3167,7 @@ ${(() => {
 })()}
 ## Available Dataset Schema:
 ${schemaDescription}
-${industryDirective}
+${schemaAnnotations}${industryDirective}
 ## Step 0: Question Decomposition
 For each question, first identify:
 - The KPI/metric being asked about (e.g., "turnover rate", "engagement score", "conversion rate")
@@ -3140,7 +3199,8 @@ Identify ALL data elements required to answer these questions and achieve these 
 7. HARD CONSTRAINT: If a dataset schema is provided above, EVERY element with calculationType "direct" MUST use an exact column name from the schema as its elementName or in componentFields. Do NOT invent column names that are not in the schema.
 8. Only generate elements that are answerable from the provided dataset schema. If the schema shows HR data, do not generate financial metrics and vice versa.
 9. For "derived" or "composite" elements, componentFields MUST contain only column names that exist in the schema above.
-10. FORBIDDEN: Do NOT generate generic placeholder elements (like "Primary Performance Metric", "Key Performance Indicator") when a schema is provided. Use the ACTUAL column names from the schema.${params.industry ? `\n11. IMPORTANT: This is a ${params.industry} project. Only generate elements relevant to ${params.industry}. Do not generate HR elements for marketing data or vice versa.` : ''}
+10. FORBIDDEN: Do NOT generate generic placeholder elements (like "Primary Performance Metric", "Key Performance Indicator") when a schema is provided. Use the ACTUAL column names from the schema.
+11. For derived/composite elements: componentFields MUST use actual column names from the schema. Example: Instead of ["employees_left", "total_employees"], use ["Termination_Date", "Employee_ID"]. pseudoCode should reference actual operations on actual columns (e.g., "COUNT(WHERE Termination_Date IS NOT NULL) / COUNT(DISTINCT Employee_ID) * 100").${params.industry ? `\n12. IMPORTANT: This is a ${params.industry} project. Only generate elements relevant to ${params.industry}. Do not generate HR elements for marketing data or vice versa.` : ''}
 
 Respond with the JSON array ONLY:`;
 
@@ -3331,6 +3391,55 @@ Respond with the JSON array ONLY:`;
         }
 
         console.log(`✅ [DS Agent AI] Post-AI validation complete for ${validatedElements.length} elements (direct + derived)`);
+
+        // POST-AI GROUNDING PASS: Resolve abstract componentFields using business definition descriptors
+        // This replaces placeholders like "employees_left" with actual columns like "Termination_Date"
+        const derivedElements = validatedElements.filter(el => {
+          const ct = el.calculationDefinition?.calculationType;
+          return ct === 'derived' || ct === 'composite' || ct === 'aggregated';
+        });
+        if (derivedElements.length > 0) {
+          console.log(`🔗 [DS Agent] Grounding pass: resolving ${derivedElements.length} abstract elements against dataset schema...`);
+          let groundedCount = 0;
+          for (const el of derivedElements) {
+            try {
+              const conceptKey = el.elementName.toLowerCase().replace(/[\s-]+/g, '_');
+              const lookupResult = await businessDefinitionRegistry.lookupDefinition(conceptKey, { industry: params.industry });
+              if (!lookupResult.found || !lookupResult.definition) continue;
+
+              const def = lookupResult.definition;
+              if (!(def as any).componentFieldDescriptors?.length) continue;
+
+              const resolvedMap = businessDefinitionRegistry.resolveDescriptorsAgainstSchema(def as any, datasetSchema);
+              if (resolvedMap.size === 0) continue;
+
+              // Replace abstract componentFields with resolved actual column names
+              const resolvedColumns: string[] = [];
+              for (const [, info] of resolvedMap) {
+                if (!info.resolvedColumn) continue;
+                if (info.matchType === 'pattern_match_all') {
+                  resolvedColumns.push(...info.resolvedColumn.split(',').map(c => c.trim()));
+                } else {
+                  resolvedColumns.push(info.resolvedColumn);
+                }
+              }
+
+              if (resolvedColumns.length > 0 && el.calculationDefinition?.formula) {
+                el.calculationDefinition.formula.componentFields = resolvedColumns;
+                // Generate grounded pseudoCode
+                const origFormula = el.calculationDefinition.formula.pseudoCode || el.calculationDefinition.formula.businessDescription || '';
+                el.calculationDefinition.formula.pseudoCode = DataScientistAgent.generateGroundedPseudoCode(origFormula, resolvedMap);
+                (el as any).groundedFromDefinition = true;
+                groundedCount++;
+                console.log(`   ✅ Grounded: "${el.elementName}" → [${resolvedColumns.join(', ')}]`);
+              }
+            } catch (err) {
+              // Non-blocking: skip failed lookups
+              console.log(`   ⚠️ Grounding skipped for "${el.elementName}": ${(err as Error).message}`);
+            }
+          }
+          console.log(`🔗 [DS Agent] Grounded ${groundedCount}/${derivedElements.length} derived/composite elements`);
+        }
       }
 
       // Ensure we have at least a unique identifier — use actual schema ID column if available

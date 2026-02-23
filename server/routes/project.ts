@@ -3519,12 +3519,10 @@ router.get("/:projectId/datasets", ensureAuthenticated, async (req, res) => {
                     const dsSchema = ds.schema || {};
 
                     for (const [col, type] of Object.entries(dsSchema)) {
-                        // Handle column name conflicts by prefixing with dataset name
+                        // Handle column name conflicts with minimal suffix (not full dataset name)
                         if (mergedSchema[col] !== undefined && normalized.length > 1) {
-                            // Both columns exist - prefix this one
-                            // ✅ PHASE 1 FIX: Additional safeguard to prevent undefined_ prefix
-                            const safePrefix = dsName || `DS${i + 1}`;
-                            const prefixedCol = `${safePrefix}_${col}`;
+                            // Both columns exist - use minimal numeric suffix
+                            const prefixedCol = `${col}_${i + 1}`;
                             const normalizedType = typeof type === 'object' && (type as any)?.type
                                 ? (type as any).type
                                 : (typeof type === 'string' ? type : 'string');

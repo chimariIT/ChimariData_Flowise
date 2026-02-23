@@ -749,7 +749,7 @@ export default function DataTransformationStep({
                             if (idx === 0) {
                                 mergedSchema[col] = colType;
                             } else {
-                                const finalColName = col in mergedSchema ? `${dsName}_${col}` : col;
+                                const finalColName = col in mergedSchema ? `${col}_${idx + 1}` : col;
                                 mergedSchema[finalColName] = colType;
                             }
                         }

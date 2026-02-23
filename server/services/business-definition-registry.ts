@@ -1093,7 +1093,25 @@ Respond ONLY with the JSON, no other text.`;
           matchPatterns: ['conversion', 'close_rate', 'win_rate'],
           synonyms: ['close_rate', 'win_rate'],
           unit: 'percent',
-          confidence: 0.95
+          confidence: 0.95,
+          componentFieldDescriptors: [
+            {
+              abstractName: 'conversions',
+              semanticMeaning: 'Count of leads that converted to customers/deals',
+              derivationLogic: 'COUNT rows WHERE status indicates conversion (won, closed, converted)',
+              columnMatchPatterns: ['conversion', 'converted', 'won', 'closed_won', 'deal_status', 'status'],
+              columnMatchType: 'direct_value',
+              dataTypeExpected: 'categorical'
+            },
+            {
+              abstractName: 'total_leads',
+              semanticMeaning: 'Total number of leads/opportunities in the pipeline',
+              derivationLogic: 'COUNT DISTINCT lead or opportunity records',
+              columnMatchPatterns: ['lead_id', 'prospect_id', 'opportunity_id', 'lead', 'prospect'],
+              columnMatchType: 'count_distinct',
+              dataTypeExpected: 'identifier'
+            }
+          ]
         }
       ],
       finance: [
@@ -1108,7 +1126,25 @@ Respond ONLY with the JSON, no other text.`;
           matchPatterns: ['roi', 'return_on_investment', 'investment_return'],
           synonyms: ['return_on_capital', 'investment_yield'],
           unit: 'percent',
-          confidence: 0.95
+          confidence: 0.95,
+          componentFieldDescriptors: [
+            {
+              abstractName: 'gain',
+              semanticMeaning: 'Revenue or gain from the investment',
+              derivationLogic: 'SUM of revenue/gain column',
+              columnMatchPatterns: ['revenue', 'gain', 'income', 'return', 'sales_amount', 'gross_revenue'],
+              columnMatchType: 'direct_value',
+              dataTypeExpected: 'numeric'
+            },
+            {
+              abstractName: 'cost',
+              semanticMeaning: 'Total cost or investment amount',
+              derivationLogic: 'SUM of cost/expense column',
+              columnMatchPatterns: ['cost', 'expense', 'spend', 'investment', 'budget', 'total_cost'],
+              columnMatchType: 'direct_value',
+              dataTypeExpected: 'numeric'
+            }
+          ]
         }
       ],
       education: [
@@ -1184,7 +1220,25 @@ Respond ONLY with the JSON, no other text.`;
           matchPatterns: ['engagement', 'interaction_rate', 'response_rate'],
           synonyms: ['interaction_rate', 'audience_engagement'],
           unit: 'percent',
-          confidence: 0.95
+          confidence: 0.95,
+          componentFieldDescriptors: [
+            {
+              abstractName: 'engagements',
+              semanticMeaning: 'Total user interactions (likes, comments, shares, clicks)',
+              derivationLogic: 'SUM of engagement metric columns',
+              columnMatchPatterns: ['like', 'comment', 'share', 'click', 'reaction', 'engagement', 'interaction'],
+              columnMatchType: 'direct_value',
+              dataTypeExpected: 'numeric'
+            },
+            {
+              abstractName: 'impressions',
+              semanticMeaning: 'Total content impressions or views',
+              derivationLogic: 'SUM of impression/view column',
+              columnMatchPatterns: ['impression', 'view', 'reach', 'exposure', 'display', 'seen'],
+              columnMatchType: 'direct_value',
+              dataTypeExpected: 'numeric'
+            }
+          ]
         },
         {
           conceptName: 'brand_awareness_score',
@@ -1288,6 +1342,131 @@ Respond ONLY with the JSON, no other text.`;
   // ========================================
   // DATASET-AWARE ENRICHMENT
   // ========================================
+
+  /**
+   * Lightweight descriptor resolution against schema — no preview data needed.
+   * Used by DS Agent grounding pass to resolve abstract componentFields to actual columns.
+   * Returns a map of abstractName → { resolvedColumn, matchType, confidence, role }.
+   */
+  resolveDescriptorsAgainstSchema(
+    definition: { componentFields?: string[]; componentFieldDescriptors?: any[] },
+    schema: Record<string, any>
+  ): Map<string, { resolvedColumn: string | null; matchType: string; confidence: number; role: string }> {
+    const result = new Map<string, { resolvedColumn: string | null; matchType: string; confidence: number; role: string }>();
+    const descriptors = (definition as any).componentFieldDescriptors as Array<{
+      abstractName: string; columnMatchPatterns?: string[]; columnMatchType?: string;
+      dataTypeExpected?: string; semanticMeaning?: string;
+    }> | undefined;
+    if (!descriptors?.length) return result;
+
+    const schemaColumns = Object.keys(schema);
+
+    // Classify columns by type
+    const dateColumns: string[] = [];
+    const numericColumns: string[] = [];
+    const categoricalColumns: string[] = [];
+    for (const col of schemaColumns) {
+      const colInfo = schema[col];
+      const colType = (typeof colInfo === 'string' ? colInfo : (colInfo as any)?.type || '').toLowerCase();
+      if (/date|datetime|timestamp/i.test(colType)) dateColumns.push(col);
+      else if (/number|integer|float|numeric|decimal/i.test(colType)) numericColumns.push(col);
+      else if (/string|text|categorical|varchar/i.test(colType)) categoricalColumns.push(col);
+    }
+
+    // Role patterns
+    const separationPatterns = /terminat|separat|end_date|exit_date|last_day|resign|depart/i;
+    const periodPatterns = /hire_date|start_date|join_date|created|date|period|year|month|roster|report|snapshot/i;
+    const identifierPatterns = /employee_id|emp_id|staff_id|worker_id|person_id|customer_id|student_id|id/i;
+
+    for (const descriptor of descriptors) {
+      const { abstractName, columnMatchType, columnMatchPatterns = [] } = descriptor;
+
+      if (columnMatchType === 'pattern_match_all') {
+        // Find ALL columns matching any of the patterns
+        const matched: string[] = [];
+        for (const col of schemaColumns) {
+          const colLower = col.toLowerCase();
+          for (const pattern of columnMatchPatterns) {
+            try {
+              if (new RegExp(pattern, 'i').test(colLower)) {
+                if (descriptor.dataTypeExpected === 'numeric') {
+                  const colInfo = schema[col];
+                  const colType = (typeof colInfo === 'string' ? colInfo : (colInfo as any)?.type || '').toLowerCase();
+                  if (/number|integer|float|numeric|decimal/i.test(colType)) matched.push(col);
+                } else {
+                  matched.push(col);
+                }
+                break;
+              }
+            } catch { /* invalid regex */ }
+          }
+        }
+        if (matched.length > 0) {
+          result.set(abstractName, { resolvedColumn: matched.join(','), matchType: 'pattern_match_all', confidence: 0.9, role: 'metric_source' });
+        }
+        continue;
+      }
+
+      // For non-pattern_match_all: find best column by name pattern matching
+      let resolvedColumn: string | null = null;
+      let role = 'metric_source';
+      let confidence = 0;
+      let matchType = 'none';
+
+      if (columnMatchType === 'date_presence_indicator') {
+        // Separation indicator: date column with termination/exit-like name
+        const candidates = dateColumns.filter(col => separationPatterns.test(col) || columnMatchPatterns.some(p => col.toLowerCase().includes(p)));
+        if (candidates.length === 0) {
+          // Fallback: try all columns for pattern match
+          for (const col of schemaColumns) {
+            if (columnMatchPatterns.some(p => col.toLowerCase().includes(p))) { candidates.push(col); break; }
+          }
+        }
+        if (candidates.length > 0) {
+          resolvedColumn = candidates[0]; role = 'separation_indicator'; confidence = 0.85; matchType = 'date_presence_indicator';
+        }
+      } else if (columnMatchType === 'count_distinct') {
+        // Identifier column for counting
+        const candidates = schemaColumns.filter(col => identifierPatterns.test(col) || columnMatchPatterns.some(p => col.toLowerCase().includes(p)));
+        if (candidates.length > 0) {
+          resolvedColumn = candidates[0]; role = 'identifier'; confidence = 0.85; matchType = 'count_distinct';
+        }
+      } else if (columnMatchType === 'date_range_filter') {
+        // Period/date column
+        const candidates = dateColumns.filter(col => periodPatterns.test(col) || columnMatchPatterns.some(p => col.toLowerCase().includes(p)));
+        if (candidates.length === 0) {
+          // Fallback: any date column
+          if (dateColumns.length > 0) { resolvedColumn = dateColumns[0]; role = 'period_indicator'; confidence = 0.5; matchType = 'date_range_filter_fallback'; }
+        } else {
+          resolvedColumn = candidates[0]; role = 'period_indicator'; confidence = 0.85; matchType = 'date_range_filter';
+        }
+      } else {
+        // direct_value or unspecified: match by column name patterns
+        for (const col of schemaColumns) {
+          const colLower = col.toLowerCase();
+          if (columnMatchPatterns.some(p => colLower.includes(p) || p.includes(colLower))) {
+            resolvedColumn = col; confidence = 0.8; matchType = 'direct_value'; break;
+          }
+        }
+        if (!resolvedColumn) {
+          // Fuzzy fallback: match by abstract name words
+          const words = abstractName.toLowerCase().split(/[_\s-]/).filter(w => w.length > 2);
+          for (const col of schemaColumns) {
+            const colLower = col.toLowerCase();
+            if (words.some(w => colLower.includes(w))) {
+              resolvedColumn = col; confidence = 0.6; matchType = 'fuzzy_name'; break;
+            }
+          }
+        }
+      }
+
+      if (resolvedColumn) {
+        result.set(abstractName, { resolvedColumn, matchType, confidence, role });
+      }
+    }
+
+    return result;
+  }
 
   /**
    * Enrich a business definition with actual dataset context.

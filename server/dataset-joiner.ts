@@ -102,12 +102,18 @@ export class DatasetJoiner {
           // Get fields from join project (exclude the join key to avoid duplication)
           const projectFields = Object.keys(joinProject.schema || {}).filter(field => field !== joinKey);
 
-          // Add prefix to field names to avoid conflicts
-          const prefixedFields = projectFields.map(field => `${safeName}_${field}`);
-          joinedFields = [...joinedFields, ...prefixedFields];
+          // Build set of current left-side columns for conflict detection
+          const currentLeftColumns = new Set(joinedFields);
+          const dsIndex = jpIdx + 2; // Base is 1, secondary datasets start at 2
 
-          // Perform the join operation with safe name
-          resultData = this.performJoin(resultData, joinData, baseJoinKey, joinKey, config.joinType, safeName);
+          // Only suffix fields that conflict with existing columns
+          const outputFields = projectFields.map(field =>
+            currentLeftColumns.has(field) ? `${field}_${dsIndex}` : field
+          );
+          joinedFields = [...joinedFields, ...outputFields];
+
+          // Perform the join operation with conflict-based naming
+          resultData = this.performJoin(resultData, joinData, baseJoinKey, joinKey, config.joinType, safeName, currentLeftColumns, dsIndex);
         }
       }
       
@@ -119,15 +125,17 @@ export class DatasetJoiner {
         newSchema[field] = info;
       });
       
-      // Add joined project schemas with prefixes (using safe names)
+      // Add joined project schemas — only suffix conflicting column names
+      const baseSchemaFields = new Set(Object.keys(baseProject.schema || {}));
       for (let jpIdx = 0; jpIdx < joinProjects.length; jpIdx++) {
         const joinProject = joinProjects[jpIdx];
-        const safeName = this.getSafeDatasetName(joinProject, jpIdx + 1);
+        const dsIndex = jpIdx + 2;
         Object.entries(joinProject.schema || {}).forEach(([field, info]) => {
           if (field !== config.joinKeys[joinProject.id]) {
-            newSchema[`${safeName}_${field}`] = {
+            const outCol = baseSchemaFields.has(field) ? `${field}_${dsIndex}` : field;
+            newSchema[outCol] = {
               ...(info as object),
-              description: `${field} from ${safeName}`
+              description: `${field} from dataset ${dsIndex}`
             };
           }
         });
@@ -173,13 +181,26 @@ export class DatasetJoiner {
     }
   }
   
+  /**
+   * Get the output column name for a right-side field during join.
+   * Only adds a suffix when the field conflicts with an existing left-side column.
+   */
+  private static getJoinedColumnName(field: string, leftColumns: Set<string>, datasetIndex: number): string {
+    if (leftColumns.has(field)) {
+      return `${field}_${datasetIndex}`;
+    }
+    return field;
+  }
+
   private static performJoin(
     leftData: any[],
     rightData: any[],
     leftKey: string,
     rightKey: string,
     joinType: 'inner' | 'left' | 'right' | 'outer',
-    rightPrefix: string
+    rightPrefix: string,
+    leftColumns?: Set<string>,
+    datasetIndex?: number
   ): any[] {
     const result: any[] = [];
 
@@ -225,10 +246,13 @@ export class DatasetJoiner {
           matchedRightKeys.add(leftKeyValue);
           const joinedRow = { ...leftRow };
 
-          // Add right row data with prefix - use actual column names
+          // Add right row data — only suffix conflicting column names
           Object.entries(rightRow).forEach(([field, value]) => {
             if (field.toLowerCase() !== actualRightKey.toLowerCase()) {
-              joinedRow[`${rightPrefix}_${field}`] = value;
+              const outCol = leftColumns && datasetIndex
+                ? this.getJoinedColumnName(field, leftColumns, datasetIndex)
+                : `${rightPrefix}_${field}`;
+              joinedRow[outCol] = value;
             }
           });
 
@@ -243,7 +267,10 @@ export class DatasetJoiner {
           // Add null values for right fields
           rightData[0] && Object.keys(rightData[0]).forEach(field => {
             if (field.toLowerCase() !== actualRightKey.toLowerCase()) {
-              joinedRow[`${rightPrefix}_${field}`] = null;
+              const outCol = leftColumns && datasetIndex
+                ? this.getJoinedColumnName(field, leftColumns, datasetIndex)
+                : `${rightPrefix}_${field}`;
+              joinedRow[outCol] = null;
             }
           });
 
@@ -266,10 +293,13 @@ export class DatasetJoiner {
             joinedRow[field] = null;
           });
 
-          // Add right row data with prefix
+          // Add right row data — only suffix conflicting column names
           Object.entries(rightRow).forEach(([field, value]) => {
             if (field.toLowerCase() !== actualRightKey.toLowerCase()) {
-              joinedRow[`${rightPrefix}_${field}`] = value;
+              const outCol = leftColumns && datasetIndex
+                ? this.getJoinedColumnName(field, leftColumns, datasetIndex)
+                : `${rightPrefix}_${field}`;
+              joinedRow[outCol] = value;
             } else {
               joinedRow[actualLeftKey] = value; // Use the join key
             }
