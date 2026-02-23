@@ -232,11 +232,35 @@ router.post('/clarify-goal', ensureAuthenticated, async (req, res) => {
     });
 
     // ==========================================
+    // PERSIST BASIC PM CONTEXT (before coordination)
+    // ==========================================
+    // Persist resolved industry immediately so downstream steps can use it
+    // even if coordination hasn't completed yet
+    const effectiveProjectId = projectId || sessionId;
+    if (effectiveProjectId) {
+      const basicIndustry = industry || 'general';
+      try {
+        await storage.atomicMergeJourneyProgress(effectiveProjectId, {
+          resolvedIndustry: {
+            value: basicIndustry,
+            confidence: 0.5,
+            source: 'pm_clarification_basic',
+            resolvedAt: new Date().toISOString()
+          },
+          industry: basicIndustry,
+          industryDomain: basicIndustry,
+        });
+        console.log(`📌 [PM Context] Persisted basic resolved industry="${basicIndustry}" (pre-coordination)`);
+      } catch (e) {
+        console.warn(`⚠️ [PM Context] Failed to persist basic context:`, e);
+      }
+    }
+
+    // ==========================================
     // MULTI-AGENT COORDINATION (NON-BLOCKING)
     // ==========================================
     // Trigger multi-agent goal analysis AFTER prepare step, when we have REAL user goals.
     // Previously this ran at upload time with generic defaults - now it runs here with actual context.
-    const effectiveProjectId = projectId || sessionId;
     if (effectiveProjectId && analysisGoal) {
       setImmediate(async () => {
         try {
@@ -288,6 +312,32 @@ router.post('/clarify-goal', ensureAuthenticated, async (req, res) => {
           await storage.updateProject(effectiveProjectId, {
             multiAgentCoordination: coordinationResult
           } as any);
+
+          // Persist PM-resolved industry and coordination key findings to journeyProgress (SSOT)
+          // This ensures downstream steps (DS elements, execution, BA) use the PM's resolved industry
+          // instead of re-deriving it independently from data signals
+          await storage.atomicMergeJourneyProgress(effectiveProjectId, {
+            resolvedIndustry: {
+              value: effectiveIndustry,
+              confidence: coordinationResult.synthesis?.confidence || 0.7,
+              source: 'pm_clarification',
+              dataSignalAlignment: null, // Will be validated by DS agent
+              resolvedAt: new Date().toISOString()
+            },
+            industry: effectiveIndustry,           // Legacy compat
+            industryDomain: effectiveIndustry,     // Legacy compat
+            pmCoordinationSummary: {
+              overallAssessment: coordinationResult.synthesis?.overallAssessment,
+              keyFindings: coordinationResult.synthesis?.keyFindings?.slice(0, 5),
+              recommendedAnalysisTypes:
+                (coordinationResult.synthesis as any)?.recommendedAnalysisTypes ||
+                coordinationResult.expertOpinions
+                  ?.filter((o: any) => o.agentType === 'data_scientist')
+                  ?.flatMap((o: any) => o.recommendedAnalysisTypes || []) || [],
+              confidence: coordinationResult.synthesis?.confidence
+            }
+          });
+          console.log(`📌 [PM Context] Persisted resolved industry="${effectiveIndustry}" to journeyProgress (SSOT)`);
 
           // Create checkpoint for UI display
           await projectAgentOrchestrator.addCheckpoint(effectiveProjectId, {

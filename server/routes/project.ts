@@ -5106,15 +5106,21 @@ router.post("/:id/generate-data-requirements", ensureAuthenticated, requireOwner
             console.warn(`⚠️ [P0-8] Could not load structured questions:`, sqError);
         }
 
-        // FIX 1B: Resolve industry from request body FIRST (eliminates race condition with debounced save)
-        // Priority: req.body.industry > journeyProgress.industry > journeyProgress.industryDomain > user.industry
+        // FIX 1B: Resolve industry with pipeline context priority chain
+        // Priority: req.body.industry > resolvedIndustry (PM) > journeyProgress.industry > user.industry
         let reqIndustry: string | undefined;
         try {
             reqIndustry = req.body.industry; // FIX 1B: Read from explicit body param first
             if (!reqIndustry) {
                 const reqProject = await storage.getProject(projectId);
                 const jp = (reqProject as any)?.journeyProgress;
-                reqIndustry = jp?.industry || jp?.industryDomain;
+                // Check PM-resolved industry first (set during clarification)
+                const resolved = jp?.resolvedIndustry;
+                if (resolved?.value && resolved.value !== 'general') {
+                    reqIndustry = resolved.value;
+                } else {
+                    reqIndustry = jp?.industry || jp?.industryDomain;
+                }
             }
             if (!reqIndustry) {
                 const userId = (req.user as any)?.id;

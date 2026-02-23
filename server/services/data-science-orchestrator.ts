@@ -123,6 +123,7 @@ export interface DataScienceRequest {
   analysisTypes: string[];
   userGoals: string[];
   userQuestions: string[];
+  industry?: string;  // Pipeline-resolved industry context (from PM clarification)
   datasetIds?: string[];
   // P0-2: DS-recommended analyses with priority for execution ordering
   analysisPath?: Array<{
@@ -366,6 +367,7 @@ export class DataScienceOrchestrator {
     console.log(`🔬 [DataScienceOrchestrator] Starting workflow ${executionId}`);
     console.log(`⚙️ Compute Engine: ${computeEngine.toUpperCase()}`);
     console.log(`📊 Analysis types: ${request.analysisTypes.join(', ')}`);
+    console.log(`🏭 Industry: ${request.industry || 'general'}`);
     console.log(`❓ Questions: ${normalizedQuestions.length}`);
     console.log(`🎯 Goals: ${normalizedGoals.length}`);
 
@@ -1129,6 +1131,10 @@ export class DataScienceOrchestrator {
       }
       // Inject compute engine for Python dual-engine dispatch
       config.engine = engineKey;
+      // Pass industry context to Python scripts for domain-specific behavior
+      if (analysisPreparation?.industry) {
+        config.industry = analysisPreparation.industry;
+      }
       return config;
     };
 

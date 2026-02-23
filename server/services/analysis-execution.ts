@@ -40,6 +40,7 @@ import { ComputeEngineSelector, type ComputeEngine, type ComputeSelectionResult 
 // U2A2A2U: BusinessAgent accessed via executeTool('ba_translate_results'|'ba_assess_business_impact'|'ba_generate_industry_insights')
 // import { BusinessAgent } from './business-agent'; // Removed: routed through MCP tool registry
 import { generateStableQuestionId } from '../constants';
+import { resolvePipelineIndustry } from './pipeline-context';
 
 // P3-1: Import types from extracted module
 import type {
@@ -1151,6 +1152,12 @@ export class AnalysisExecutionService {
           }
         }
 
+        // Resolve industry once for all BA tool calls using pipeline context
+        const { industry: pipelineIndustry, source: industrySource } = resolvePipelineIndustry(
+          (project as any).journeyProgress
+        );
+        console.log(`🏭 [Analysis] Using industry="${pipelineIndustry}" (source: ${industrySource})`);
+
         // Generate business impact assessment via MCP tool
         let businessImpact: any = null;
         try {
@@ -1164,7 +1171,7 @@ export class AnalysisExecutionService {
             {
               goals: Array.isArray(projectGoals) ? projectGoals : [projectGoals],
               analysisResults: { insights: allInsights, recommendations: allRecommendations },
-              industry: (project as any).journeyProgress?.industry || 'general',
+              industry: pipelineIndustry,
               // Pass analysis method for industry-specific impact branches (e.g., RFM in retail)
               analysisMethod: request.analysisTypes?.join(', ') || 'descriptive'
             },
@@ -1199,7 +1206,7 @@ export class AnalysisExecutionService {
             'ba_generate_industry_insights',
             'business_agent',
             {
-              industry: (project as any).journeyProgress?.industry || 'general',
+              industry: pipelineIndustry,
               userGoals: (project as any).journeyProgress?.goals || [],
               dataSchema: Object.keys(dataSchema).length > 0 ? dataSchema : undefined
             },
@@ -1996,6 +2003,17 @@ export class AnalysisExecutionService {
 
     let results: DataScienceResults;
 
+    // Resolve pipeline industry once for all downstream tool calls
+    let executionIndustry = 'general';
+    try {
+      const indProject = await storage.getProject(request.projectId);
+      const { industry: resolvedInd, source: indSource } = resolvePipelineIndustry(
+        (indProject as any)?.journeyProgress
+      );
+      executionIndustry = resolvedInd;
+      console.log(`🏭 [Execution] Pipeline industry="${executionIndustry}" (source: ${indSource})`);
+    } catch { /* non-blocking */ }
+
     // === SURVEY DATA AUTO-PREPROCESSING ===
     // If journeyProgress indicates this is survey data and transformations weren't
     // already applied in the transformation step, auto-apply them now
@@ -2436,6 +2454,7 @@ export class AnalysisExecutionService {
               analysisTypes: [analysisType],
               userGoals,
               userQuestions,
+              industry: executionIndustry,
               datasetIds: request.datasetIds,
               columnsToExclude: request.columnsToExclude,
               // FIX 1: Pass required columns for this analysis type
@@ -3086,6 +3105,7 @@ export class AnalysisExecutionService {
           analysisTypes: request.analysisTypes,
           userGoals,
           userQuestions,
+          industry: executionIndustry,
           datasetIds: request.datasetIds,
           columnsToExclude: request.columnsToExclude
         },

@@ -47,6 +47,7 @@ export interface AnalysisPreparation {
   analysisType: string;
   columnRoles: ColumnRoleAssignment;
   derivedColumns: DerivedColumnSpec[];
+  industry?: string;  // Pipeline-resolved industry context
   businessContext: {
     questionIds: string[];
     questionTexts: string[];
@@ -305,6 +306,11 @@ export class AnalysisDataPreparer {
     if (roles.method) config.method = roles.method;
     if (roles.model_type) config.model_type = roles.model_type;
     if (roles.columns && roles.columns.length > 0) config.columns = roles.columns;
+
+    // Pass industry context to Python for domain-specific analysis behavior
+    if (preparation.industry) {
+      config.industry = preparation.industry;
+    }
 
     // Attach business context for evidence chain
     if (preparation.businessContext.questionIds.length > 0) {

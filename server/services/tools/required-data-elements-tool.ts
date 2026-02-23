@@ -304,14 +304,41 @@ export class RequiredDataElementsTool {
             input.datasetMetadata
         );
 
-        // FIX: ALWAYS generate analysis-based elements first (what data is NEEDED)
-        // FIX: Resolve industry from DATA SIGNALS first, before element generation
-        // This ensures the DS Agent AI receives the data-inferred industry, not the
-        // user-profile industry which may not match the uploaded dataset
+        // FIX: Resolve industry using pipeline context priority chain
+        // Priority: PM-resolved (from journeyProgress) > data signals > explicit param > general
+        // This ensures PM's clarified industry is not overridden by data signals
+        let pipelineResolvedIndustry: { value: string; confidence: number; source: string } | undefined;
+        try {
+            if (input.projectId) {
+                const { storage } = await import('../../storage');
+                const proj = await storage.getProject(input.projectId);
+                pipelineResolvedIndustry = (proj as any)?.journeyProgress?.resolvedIndustry;
+            }
+        } catch { /* non-blocking */ }
+
         const resolvedIndustry = this.resolveIndustryFromData(
-            input.datasetMetadata, normalizedGoals, normalizedQuestions, input.industry
+            input.datasetMetadata, normalizedGoals, normalizedQuestions,
+            input.industry, pipelineResolvedIndustry
         );
         console.log(`🏭 [Data Elements Tool] Resolved industry for element generation: ${resolvedIndustry}`);
+
+        // Enrich resolvedIndustry in journeyProgress with data signal alignment (traceability)
+        if (input.projectId && pipelineResolvedIndustry) {
+            const dataResult = this.detectIndustryFromDataSignals(input.datasetMetadata, normalizedGoals, normalizedQuestions);
+            try {
+                const { storage } = await import('../../storage');
+                await storage.atomicMergeJourneyProgress(input.projectId, {
+                    resolvedIndustry: {
+                        ...pipelineResolvedIndustry,
+                        dataSignalAlignment: dataResult.industry === pipelineResolvedIndustry.value ? 'confirmed' :
+                            dataResult.industry === 'general' ? 'no_signal' : 'divergent',
+                        dataSignalIndustry: dataResult.industry,
+                        dataSignalScore: dataResult.score,
+                        enrichedAt: new Date().toISOString()
+                    }
+                });
+            } catch { /* non-blocking */ }
+        }
 
         // Generate analysis-based requirements with actual dataset context
         // When schema is available, elements should reference actual column names
@@ -3931,17 +3958,63 @@ assert df['${element.sourceField}'].nunique() == len(df), "Field must have uniqu
     }
 
     /**
-     * Resolve industry context from data signals first, explicit param as fallback.
-     * Requires 2+ matching signals for confidence — prevents single-keyword false positives
-     * (e.g., "engagement" alone won't trigger "hr" industry).
+     * Resolve industry context with pipeline priority chain.
+     * PM-resolved industry takes precedence; data signals validate/enrich.
+     *
+     * Priority:
+     *  1. resolvedIndustry from journeyProgress (set by PM clarification)
+     *  2. Data signal inference (when no PM context available)
+     *  3. Explicit parameter fallback
+     *  4. 'general'
      */
     private resolveIndustryFromData(
         datasetMetadata: any,
         normalizedGoals: string[],
         normalizedQuestions: string[],
-        explicitIndustry?: string
+        explicitIndustry?: string,
+        resolvedIndustry?: { value: string; confidence: number; source: string }
     ): string {
-        // Priority 1: Infer from dataset column names + goals/questions (data doesn't lie)
+        // Always detect data signals (for validation and enrichment, regardless of PM context)
+        const dataResult = this.detectIndustryFromDataSignals(datasetMetadata, normalizedGoals, normalizedQuestions);
+
+        // Priority 1: PM-resolved industry (validated against data signals)
+        if (resolvedIndustry?.value && resolvedIndustry.value !== 'general') {
+            if (dataResult.industry !== 'general' && dataResult.industry !== resolvedIndustry.value) {
+                console.log(`   ⚠️ Data signals suggest "${dataResult.industry}" (${dataResult.score} signals) vs PM-resolved "${resolvedIndustry.value}" — keeping PM authority`);
+            } else if (dataResult.industry === resolvedIndustry.value) {
+                console.log(`   ✅ Data signals confirm PM-resolved industry: ${resolvedIndustry.value} (${dataResult.score} signals)`);
+            } else {
+                console.log(`   📌 Using PM-resolved industry: ${resolvedIndustry.value} (no competing data signals)`);
+            }
+            return resolvedIndustry.value;
+        }
+
+        // Priority 2: Data signal inference (when no PM context available)
+        if (dataResult.industry !== 'general') {
+            console.log(`   Industry context from data signals: ${dataResult.industry} (${dataResult.score} signals)`);
+            return dataResult.industry;
+        }
+
+        // Priority 3: Explicit parameter fallback
+        if (explicitIndustry && explicitIndustry !== 'general' && explicitIndustry !== 'other') {
+            console.log(`   Industry context from explicit param (no data signals): ${explicitIndustry.toLowerCase()}`);
+            return explicitIndustry.toLowerCase();
+        }
+
+        console.log(`   Industry context: general (insufficient signals)`);
+        return 'general';
+    }
+
+    /**
+     * Detect industry from data signals (column names, goals, questions).
+     * Extracted from resolveIndustryFromData for reuse in validation and enrichment.
+     * Requires 2+ matching signals for confidence.
+     */
+    private detectIndustryFromDataSignals(
+        datasetMetadata: any,
+        normalizedGoals: string[],
+        normalizedQuestions: string[]
+    ): { industry: string; score: number } {
         const datasetColumns = datasetMetadata?.columns ||
             (datasetMetadata && typeof datasetMetadata === 'object' && !Array.isArray(datasetMetadata)
                 ? Object.keys(datasetMetadata) : []);
@@ -3949,15 +4022,12 @@ assert df['${element.sourceField}'].nunique() == len(df), "Field must have uniqu
         const combinedContext = [...normalizedGoals, ...normalizedQuestions].join(' ').toLowerCase();
         const fullContext = `${columnContext} ${combinedContext}`;
 
-        // Score-based detection — require 2+ signals for confidence
         const industryScores: Record<string, number> = {};
 
         // --- Text-based signals (goals + questions + column names combined) ---
-
         const marketingSignals = (fullContext.match(/\b(campaign|impression|click.?rate|click.?through|ad.?spend|ctr|cpc|cpm|marketing|seo|sem|social.?media|lead.?gen|conversion.?rate|bounce.?rate|open.?rate|landing.?page|email.?campaign|subscriber|newsletter)\b/gi) || []).length;
         if (marketingSignals >= 2) industryScores['marketing'] = marketingSignals;
 
-        // HR: expanded with compound signals and common HR column patterns
         const hrSignals = (fullContext.match(/\b(employee|hr\b|human.?resource|turnover|headcount|attrition|hire|onboard|payroll|fte|termination|separation|retention|tenure|workforce|staff|supervisor|engagement.?score|satisfaction.?score|performance.?review|absenteeism|department|manager|team.?lead)\b/gi) || []).length;
         if (hrSignals >= 2) industryScores['hr'] = hrSignals;
 
@@ -3976,10 +4046,9 @@ assert df['${element.sourceField}'].nunique() == len(df), "Field must have uniqu
         const healthSignals = (fullContext.match(/\b(patient|diagnosis|clinical|treatment|hospital|icd|cpt|ehr|readmission|prescription|dosage|symptom|patient.?id|vitals)\b/gi) || []).length;
         if (healthSignals >= 2) industryScores['healthcare'] = healthSignals;
 
-        // --- Column-name signal boost: scan actual column names for industry-specific patterns ---
-        // Column names are strong signals because they reflect the actual data, not just user phrasing
+        // --- Column-name signal boost ---
         if (datasetColumns.length > 0) {
-            const colStr = columnContext; // already lowercased
+            const colStr = columnContext;
             const columnIndustryPatterns: Record<string, RegExp> = {
                 'hr': /\b(employee.?id|emp.?id|hire.?date|termination.?date|department|manager|team|supervisor|staff.?id|tenure|salary|position|job.?title|performance)\b/gi,
                 'marketing': /\b(campaign.?id|ad.?spend|impressions|clicks|ctr|cpc|cpm|channel|utm|audience|creative)\b/gi,
@@ -4000,21 +4069,11 @@ assert df['${element.sourceField}'].nunique() == len(df), "Field must have uniqu
             }
         }
 
-        // Pick highest-scoring industry from data signals
         const topIndustry = Object.entries(industryScores).sort((a, b) => b[1] - a[1])[0];
         if (topIndustry && topIndustry[1] >= 2) {
-            console.log(`   Industry context from data signals: ${topIndustry[0]} (${topIndustry[1]} signals)`);
-            return topIndustry[0];
+            return { industry: topIndustry[0], score: topIndustry[1] };
         }
-
-        // Priority 2: Fallback to explicit industry ONLY if no data signals detected
-        if (explicitIndustry && explicitIndustry !== 'general' && explicitIndustry !== 'other') {
-            console.log(`   Industry context from explicit param (no data signals): ${explicitIndustry.toLowerCase()}`);
-            return explicitIndustry.toLowerCase();
-        }
-
-        console.log(`   Industry context: general (insufficient signals)`);
-        return 'general';
+        return { industry: 'general', score: 0 };
     }
 
     /**

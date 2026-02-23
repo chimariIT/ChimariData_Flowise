@@ -1,6 +1,7 @@
 import { ChimaridataAI } from './chimaridata-ai';
 import { KnowledgeGraphService, type KnowledgeTemplate, type RegulationKnowledge } from './knowledge-graph-service';
 import type { BusinessContext as PlanBusinessContext, DataAssessment } from '@shared/schema';
+import { resolvePipelineIndustry } from './pipeline-context';
 import {
   NaturalLanguageTranslator,
   naturalLanguageTranslator,
@@ -454,7 +455,7 @@ export class BusinessAgent {
         const journeyProgress = project?.journeyProgress || {};
         const userGoals = journeyProgress?.goals || journeyProgress?.userQuestions || [];
         const analysisResults = project?.analysisResults || previousResults?.analysisResults || {};
-        const industry = journeyProgress?.industry || project?.metadata?.industry || 'general';
+        const { industry } = resolvePipelineIndustry(journeyProgress, project?.metadata?.industry);
         const projectName = project?.name || 'Data Analysis Project';
 
         // Build AI prompt for dynamic key findings
@@ -509,7 +510,7 @@ Return ONLY valid JSON.`;
 
         const journeyProgress = project?.journeyProgress || {};
         const userGoals = journeyProgress?.goals || journeyProgress?.userQuestions || [];
-        const industry = journeyProgress?.industry || project?.metadata?.industry || 'general';
+        const { industry } = resolvePipelineIndustry(journeyProgress, project?.metadata?.industry);
         const analysisResults = project?.analysisResults || previousResults?.analysisResults || {};
         const dataSchema = journeyProgress?.dataSchema || project?.metadata?.schema || {};
 
@@ -566,7 +567,7 @@ Return ONLY valid JSON.`;
 
         const journeyProgress = project?.journeyProgress || {};
         const userGoals = journeyProgress?.goals || journeyProgress?.userQuestions || [];
-        const industry = journeyProgress?.industry || project?.metadata?.industry || 'general';
+        const { industry } = resolvePipelineIndustry(journeyProgress, project?.metadata?.industry);
         const analysisResults = project?.analysisResults || previousResults?.analysisResults || {};
         const analysisTypes = journeyProgress?.analysisPath?.map((a: any) => a.analysisType || a.type) || [];
 
@@ -615,7 +616,7 @@ Return ONLY valid JSON with 3-5 recommendations.`;
         console.log('💼 [BA] Performing dynamic compliance check...');
 
         const journeyProgress = project?.journeyProgress || {};
-        const industry = journeyProgress?.industry || project?.metadata?.industry || 'general';
+        const { industry } = resolvePipelineIndustry(journeyProgress, project?.metadata?.industry);
         const piiDecision = journeyProgress?.piiDecision || {};
         const dataSchema = journeyProgress?.dataSchema || project?.metadata?.schema || {};
 
