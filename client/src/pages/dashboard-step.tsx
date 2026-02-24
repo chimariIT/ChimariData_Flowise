@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useLocation } from "wouter";
 import { useProject } from "@/hooks/useProject";
 import { apiClient } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
@@ -85,12 +86,23 @@ interface DashboardStepProps {
 
 export default function DashboardStep({ journeyType, onNext, onPrevious }: DashboardStepProps) {
   const { projectId, project, journeyProgress, isLoading: projectLoading } = useProject(localStorage.getItem('currentProjectId') || undefined);
+  const [, setLocation] = useLocation();
 
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState('translated'); // ✅ Default to audience-translated results (Issue #18)
   const [isLoading, setIsLoading] = useState(true);
   const [audience, setAudience] = useState<string>('general');
   const [complexity, setComplexity] = useState<'Simple' | 'Intermediate' | 'Advanced'>('Simple');
+
+  // Preview/paywall state from server response
+  const [isPreview, setIsPreview] = useState(false);
+  const [paymentRequired, setPaymentRequired] = useState(false);
+  const [paymentUrl, setPaymentUrl] = useState<string | null>(null);
+  const [previewCounts, setPreviewCounts] = useState<{
+    fullInsightCount?: number;
+    fullVisualizationCount?: number;
+    fullRecommendationCount?: number;
+  }>({});
 
   // Real data from backend
   const [analysisResults, setAnalysisResults] = useState<any>(null);
@@ -260,6 +272,18 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
       if (data.success && data.results) {
         console.log('✅ [Dashboard] Results loaded from API (authoritative source)');
         console.log(`   Insights: ${data.results.insights?.length || 0}, Recommendations: ${data.results.recommendations?.length || 0}`);
+        console.log(`   isPreview: ${data.results.isPreview}, paymentRequired: ${data.results.paymentRequired}`);
+
+        // Track preview/paywall state from server
+        setIsPreview(data.results.isPreview === true);
+        setPaymentRequired(data.results.paymentRequired === true);
+        setPaymentUrl(data.results.paymentUrl || null);
+        setPreviewCounts({
+          fullInsightCount: data.results.fullInsightCount,
+          fullVisualizationCount: data.results.fullVisualizationCount,
+          fullRecommendationCount: data.results.fullRecommendationCount,
+        });
+
         setAnalysisResults(data.results);
         setInsights(data.results.insights || []);
         setRecommendations(data.results.recommendations || []);
@@ -786,6 +810,35 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
           </CardDescription>
         </CardHeader>
       </Card>
+
+      {/* Preview/Paywall Banner — shown when server returns isPreview: true */}
+      {isPreview && paymentRequired && (
+        <Card className="border-amber-300 bg-amber-50">
+          <CardContent className="py-4">
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div className="flex items-center gap-3">
+                <AlertCircle className="w-5 h-5 text-amber-600 flex-shrink-0" />
+                <div>
+                  <p className="font-semibold text-amber-900">Preview Mode</p>
+                  <p className="text-sm text-amber-700">
+                    You're viewing a limited preview.
+                    {previewCounts.fullInsightCount ? ` ${previewCounts.fullInsightCount} insights, ` : ''}
+                    {previewCounts.fullVisualizationCount ? `${previewCounts.fullVisualizationCount} visualizations, ` : ''}
+                    {previewCounts.fullRecommendationCount ? `and ${previewCounts.fullRecommendationCount} recommendations ` : ''}
+                    available after payment.
+                  </p>
+                </div>
+              </div>
+              <Button
+                className="bg-amber-600 hover:bg-amber-700"
+                onClick={() => setLocation(paymentUrl || `/projects/${projectId}/payment`)}
+              >
+                Unlock Full Results
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {journeyType === 'business' && (
         <Card className="border-emerald-200 bg-emerald-50">

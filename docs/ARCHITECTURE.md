@@ -98,7 +98,7 @@ USER INPUT                                                              USER OUT
 | 4. **Transformation** | `data-transformation-step.tsx` | `POST /api/projects/:id/execute-transformations` | `datasets.ingestionMetadata.transformedData` |
 | 5. **Plan** | `plan-step.tsx` | Analysis plans via agents | `analysis_plans` table, `journeyProgress` |
 | 6. **Execute** | `execute-step.tsx` | `POST /api/analysis-execution/execute` | `projects.analysisResults`, `project_artifacts` |
-| 7. **Results** | `project-results.tsx` | `GET /api/projects/:id/artifacts` | `project_artifacts` table |
+| 7. **Results** | `dashboard-step.tsx` | `GET /api/analysis-execution/results/:id` | `projects.analysisResults`, `project_artifacts` |
 
 ### Journey State Flow
 
@@ -518,7 +518,9 @@ The main user dashboard displays:
 
 ### Project Results Dashboard
 
-**File**: `client/src/pages/project-results.tsx`
+**File**: `client/src/pages/dashboard-step.tsx`
+**API**: `GET /api/analysis-execution/results/:projectId`
+**Routes**: `/projects/:id/results`, `/journeys/:type/results`
 
 Analysis results rendered with:
 - Executive summary with key findings

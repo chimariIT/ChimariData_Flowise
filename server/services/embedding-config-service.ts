@@ -7,7 +7,7 @@
 
 import { db } from '../db';
 import { embeddingProviderConfig, columnEmbeddings } from '../../shared/schema';
-import { eq, lt, count } from 'drizzle-orm';
+import { eq, lt, or, isNull, count } from 'drizzle-orm';
 import type { EmbeddingProviderConfig } from './embedding-providers/types';
 import { EmbeddingProviderRegistry } from './embedding-providers/registry';
 
@@ -131,10 +131,15 @@ export class EmbeddingConfigService {
         .select({ count: count() })
         .from(columnEmbeddings);
 
+      // Count rows with outdated OR NULL config_version as stale
+      // (NULL means pre-versioning embeddings, which isStale() also treats as stale)
       const [staleResult] = await db
         .select({ count: count() })
         .from(columnEmbeddings)
-        .where(lt(columnEmbeddings.configVersion, currentConfigVersion));
+        .where(or(
+          lt(columnEmbeddings.configVersion, currentConfigVersion),
+          isNull(columnEmbeddings.configVersion)
+        ));
 
       const total = totalResult?.count ?? 0;
       const stale = staleResult?.count ?? 0;

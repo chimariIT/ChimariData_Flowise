@@ -25,12 +25,16 @@ import type {
   EmbeddingOptions,
 } from './embedding-providers';
 
+import { embeddingConfigService } from './embedding-config-service';
+
 // Re-export types for backward compatibility (consumers import from here)
 export type { EmbeddingProviderName, EmbeddingResult, EmbeddingOptions };
 
 class EmbeddingService {
   private registry: EmbeddingProviderRegistry;
   private defaultTruncate = 30000;
+  private _configLoaded = false;
+  private _configLoadPromise: Promise<void> | null = null;
 
   constructor() {
     this.registry = new EmbeddingProviderRegistry();
@@ -44,6 +48,38 @@ class EmbeddingService {
     this.registry.register(new CohereEmbeddingProvider());
   }
 
+  /**
+   * Load persisted config from DB and apply to registry.
+   * Called lazily on first use and eagerly from server startup.
+   * Safe to call multiple times — only loads once.
+   */
+  async loadPersistedConfig(): Promise<void> {
+    if (this._configLoaded) return;
+    if (this._configLoadPromise) return this._configLoadPromise;
+
+    this._configLoadPromise = (async () => {
+      try {
+        const config = await embeddingConfigService.loadConfig();
+        this.registry.setConfig(config);
+        this._configLoaded = true;
+        console.log(`🔗 [Embedding] Loaded config from DB (version: ${config.configVersion}, dimension: ${config.targetDimension}, order: [${config.providerOrder.join(', ')}])`);
+      } catch (error: any) {
+        // Non-fatal: registry already has env-var defaults
+        console.warn(`[Embedding] Could not load persisted config, using defaults: ${error.message}`);
+        this._configLoaded = true;
+      }
+    })();
+
+    return this._configLoadPromise;
+  }
+
+  /** Ensure config is loaded before first embedding call */
+  private async ensureConfigLoaded(): Promise<void> {
+    if (!this._configLoaded) {
+      await this.loadPersistedConfig();
+    }
+  }
+
   // ==========================================
   // PUBLIC API (backward compatible)
   // ==========================================
@@ -54,6 +90,8 @@ class EmbeddingService {
    * Normalizes result to target dimension.
    */
   async embedText(text: string, options: EmbeddingOptions = {}): Promise<EmbeddingResult> {
+    await this.ensureConfigLoaded();
+
     if (!text || text.trim().length === 0) {
       throw new Error('Text cannot be empty');
     }
@@ -98,6 +136,7 @@ class EmbeddingService {
    * Tries providers in fallback order. Normalizes all results.
    */
   async embedBatch(texts: string[], options: EmbeddingOptions = {}): Promise<EmbeddingResult[]> {
+    await this.ensureConfigLoaded();
     if (texts.length === 0) return [];
 
     const truncateLength = options.truncateLength ?? this.defaultTruncate;
@@ -171,12 +210,13 @@ class EmbeddingService {
 // Singleton instance
 export const embeddingService = new EmbeddingService();
 
-// Log available providers on startup for diagnostics
-{
+// Load persisted config from DB and log providers on startup
+// This runs async — if DB is not yet ready, config will be loaded lazily on first use
+embeddingService.loadPersistedConfig().then(() => {
   const registry = embeddingService.getRegistry();
   const configured = registry.getConfiguredProviders();
   if (configured.length > 0) {
-    const names = configured.map(p => p.name).join(', ');
+    const names = configured.map((p: any) => p.name).join(', ');
     console.log(`🔗 [Embedding] Available providers: ${names} (target: ${registry.getTargetDimension()}d)`);
   } else {
     console.warn(
@@ -184,4 +224,4 @@ export const embeddingService = new EmbeddingService();
       `Set OPENAI_API_KEY, GOOGLE_AI_API_KEY, OLLAMA_BASE_URL, TOGETHER_API_KEY, HUGGINGFACE_API_KEY, or COHERE_API_KEY.`
     );
   }
-}
+}).catch(() => { /* Non-fatal — config loaded lazily on first embed call */ });

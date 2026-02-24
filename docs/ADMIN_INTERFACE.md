@@ -1,12 +1,12 @@
 # Admin Interface - Complete Admin Panel
 
-**Last Updated**: February 23, 2026
+**Last Updated**: February 24, 2026
 
 ## Overview
 
-Complete UI-based admin interface for managing all aspects of the ChimariData platform. The admin panel provides 15 UI files across 14 tabs, backed by 165+ API endpoints across 6 route files. Features include agent/tool management, billing configuration, campaign management, consultation workflow, error tracking, database management, knowledge graph management, project debugging, and system monitoring — all with real-time WebSocket updates.
+Complete UI-based admin interface for managing all aspects of the ChimariData platform. The admin panel provides 16 UI files across 15 tabs, backed by 170+ API endpoints across 7 route files. Features include agent/tool management, billing configuration, campaign management, consultation workflow, error tracking, database management, knowledge graph management, embedding provider configuration, project debugging, and system monitoring — all with real-time WebSocket updates.
 
-> **Audit Note (Feb 2026):** This document previously covered only agent and tool management (2 pages). Updated to document all 15 admin UI files, 14 tab values, and the full admin routing system.
+> **Audit Note (Feb 2026):** This document previously covered only agent and tool management (2 pages). Updated to document all 16 admin UI files, 15 tab values, and the full admin routing system.
 
 ## Admin Pages Overview
 
@@ -14,7 +14,7 @@ Complete UI-based admin interface for managing all aspects of the ChimariData pl
 **Entry point**: `index.tsx` (admin layout with tab routing)
 **Routing**: `/admin/:tab` — URL path segment maps to tab value
 
-### All Admin Pages (15 files, 14 tabs)
+### All Admin Pages (16 files, 15 tabs)
 
 | # | Tab Value | Component File | Description |
 |---|-----------|---------------|-------------|
@@ -32,10 +32,11 @@ Complete UI-based admin interface for managing all aspects of the ChimariData pl
 | 12 | `database` | `database-optimization.tsx` | Database health, optimization, and maintenance |
 | 13 | `state-inspector` | `project-state-inspector.tsx` | Project state debugging tool |
 | 14 | `knowledge` | `knowledge-management.tsx` | Knowledge graph nodes, edges, patterns, enrichment review |
+| 15 | `embeddings` | `embedding-management.tsx` | Embedding provider ordering, model selection, connectivity testing, stale monitoring |
 
-**Note**: `index.tsx` is the layout shell (15th file), not a tab itself.
+**Note**: `index.tsx` is the layout shell (16th file), not a tab itself.
 
-### Backend Route Files (6 files, 165+ endpoints)
+### Backend Route Files (7 files, 170+ endpoints)
 
 | Route File | Mount Prefix | Endpoints | Purpose |
 |-----------|-------------|-----------|---------|
@@ -45,6 +46,7 @@ Complete UI-based admin interface for managing all aspects of the ChimariData pl
 | `admin-consultation.ts` | `/api/admin/consultations` | ~9 | Consultation lifecycle |
 | `admin-consultation-pricing.ts` | `/api/admin/consultation-pricing` | ~7 | Consultation pricing CRUD |
 | `admin-service-pricing.ts` | `/api/admin/service-pricing` | ~6 | Service pricing CRUD |
+| `admin-embedding.ts` | `/api/admin/embedding` | ~6 | Provider config, testing, stats, regeneration |
 
 ---
 
