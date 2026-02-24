@@ -1078,12 +1078,12 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
     analysesToExecute = [...new Set(analysesToExecute)];
 
     if (analysesToExecute.length === 0) {
-      toast({
-        title: "No Analysis Selected",
-        description: "Please select at least one analysis type before executing.",
-        variant: "destructive"
-      });
-      return;
+      // Last resort: use sensible defaults instead of failing entirely
+      // The DS agent should have recommended types, but if state was lost during
+      // step transitions or payment redirect, fall back to the two most common types
+      analysesToExecute = ['statistical_analysis', 'exploratory_data_analysis'];
+      console.warn('⚠️ [Execute] No analyses found in state or journeyProgress, using defaults:', analysesToExecute);
+      setSelectedAnalyses(analysesToExecute);
     }
 
     // Phase 3 - Task 3.3: Show checkpoint dialog first

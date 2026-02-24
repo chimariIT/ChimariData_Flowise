@@ -172,8 +172,21 @@ router.post('/execute', ensureAuthenticated, async (req, res) => {
       });
     }
 
-    const { projectId: validatedProjectId, analysisTypes, datasetIds, analysisPath, questionAnswerMapping, previewOnly } = validation.data;
+    const { projectId: validatedProjectId, analysisTypes: requestedAnalysisTypes, datasetIds, analysisPath, questionAnswerMapping, previewOnly } = validation.data;
     projectId = validatedProjectId; // Assign to outer scope variable for catch block access
+
+    // Expand analysisTypes from analysisPath if the DS agent recommended more types
+    let analysisTypes = [...requestedAnalysisTypes];
+    if (analysisPath && analysisPath.length > 0) {
+      const pathTypes = analysisPath
+        .map((a: any) => a.analysisType || a.type)
+        .filter((t: string | undefined): t is string => !!t);
+      const merged = [...new Set([...analysisTypes, ...pathTypes])];
+      if (merged.length > analysisTypes.length) {
+        console.log(`📊 [Execution] Expanded analysisTypes from ${analysisTypes.length} to ${merged.length} using analysisPath: [${merged.join(', ')}]`);
+        analysisTypes = merged;
+      }
+    }
 
     const project = await storage.getProject(projectId);
 

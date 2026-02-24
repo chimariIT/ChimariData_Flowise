@@ -143,8 +143,14 @@ export default function UserDashboard({ user, onLogout }: UserDashboardProps) {
     setLocation('/');
   };
 
-  const handleViewProject = (projectId: string) => {
-    setLocation(`/project/${projectId}`);
+  const handleViewProject = (projectId: string, project?: DashboardProject) => {
+    // Completed projects → results page; in-progress → monitoring dashboard
+    const isCompleted = project?.status === 'completed';
+    if (isCompleted) {
+      setLocation(`/projects/${projectId}/results`);
+    } else {
+      setLocation(`/project/${projectId}`);
+    }
   };
 
   const handleResumeJourney = async (projectId: string, journeyType?: string) => {
@@ -391,7 +397,7 @@ export default function UserDashboard({ user, onLogout }: UserDashboardProps) {
                               Re-analyze
                             </Button>
                           )}
-                          <Button variant="outline" size="sm" onClick={() => handleViewProject(project.id)}>
+                          <Button variant="outline" size="sm" onClick={() => handleViewProject(project.id, project)}>
                             <Eye className="w-4 h-4 mr-2" />
                             View
                           </Button>
@@ -399,7 +405,7 @@ export default function UserDashboard({ user, onLogout }: UserDashboardProps) {
                             <Button
                               variant="outline"
                               size="sm"
-                              onClick={() => setLocation(`/project/${project.id}/results`)}
+                              onClick={() => setLocation(`/projects/${project.id}/results`)}
                             >
                               <Download className="w-4 h-4 mr-2" />
                               Results
