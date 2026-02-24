@@ -150,8 +150,18 @@ export default function UserDashboard({ user, onLogout }: UserDashboardProps) {
     const isCompleted = project?.status === 'completed'
       || !!p?.analysisResults
       || p?.journeyProgress?.executionStatus === 'completed';
+
+    // Journey complete but not paid → route to pricing step
+    const jp = p?.journeyProgress;
+    const isJourneyDone = jp?.percentComplete >= 100
+      || (Array.isArray(jp?.completedSteps) && jp.completedSteps.length >= 8);
+    const hasNotPaid = !(project as any)?.isPaid && !p?.analysisResults;
+
     if (isCompleted) {
       setLocation(`/projects/${projectId}/results`);
+    } else if (isJourneyDone && hasNotPaid) {
+      const journeyType = (project as any)?.journeyType || 'non-tech';
+      setLocation(`/journeys/${journeyType}/pricing?projectId=${projectId}`);
     } else {
       setLocation(`/project/${projectId}`);
     }

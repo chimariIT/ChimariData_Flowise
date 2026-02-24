@@ -73,8 +73,8 @@ export function ResultsPreview({
           keyInsights: data.preview.keyInsights,
           expectedRecommendations: data.preview.recommendations,
           estimatedValue: data.estimatedValue,
-          confidence: 0.85, // Default confidence for preview
-          sampleVisualizations: ['Data Overview', 'Key Metrics', 'Trend Analysis'],
+          confidence: data.confidence ?? 0.85,
+          sampleVisualizations: data.sampleVisualizations ?? ['Data Overview', 'Key Metrics', 'Trend Analysis'],
           methodology: `Advanced ${analysisType} analysis using statistical methods and AI-powered insights`
         });
       } else {

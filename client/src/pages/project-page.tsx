@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { getResumeRoute } from "@/utils/journey-routing";
-import { ArrowLeft, Database, FileText, BarChart3, Brain, Layers, Route, Bot, Upload, Timer, Activity, PlayCircle } from "lucide-react";
+import { ArrowLeft, Database, FileText, BarChart3, Brain, Layers, Route, Bot, Upload, Timer, Activity, PlayCircle, CreditCard } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -79,6 +79,16 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
   const { data: journeyState } = useJourneyState(projectId, {
     enabled: !!projectId && !!project?.journeyType
   });
+
+  // Detect "journey complete but not paid" state — users need a path to payment
+  const isJourneyComplete = journeyState != null && journeyState.percentComplete >= 100;
+  const needsPayment = isJourneyComplete
+    && !(project as any)?.isPaid
+    && (journeyState?.costs?.spent ?? 0) === 0
+    && !(project as any)?.analysisResults;
+  const paymentRoute = needsPayment && journeyState?.journeyType
+    ? `/journeys/${journeyState.journeyType}/pricing?projectId=${projectId}`
+    : null;
 
   const resolveArtifactFileRef = useCallback((artifact: any) => {
     if (!artifact || !Array.isArray(artifact.fileRefs)) {
@@ -438,13 +448,23 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
               </div>
             </div>
             <div className="flex items-center space-x-2">
-              {journeyState?.canResume && (
+              {needsPayment && paymentRoute && (
+                <Button
+                  variant="default"
+                  size="sm"
+                  className="bg-blue-600 hover:bg-blue-700"
+                  onClick={() => setLocation(paymentRoute)}
+                >
+                  <CreditCard className="w-4 h-4 mr-2" />
+                  Proceed to Payment
+                </Button>
+              )}
+              {journeyState?.canResume && !needsPayment && (
                 <Button
                   variant="default"
                   size="sm"
                   className="bg-green-600 hover:bg-green-700"
                   onClick={async () => {
-                    // FIX: Use async/await and check route validity (consistent with card button)
                     const route = await getResumeRoute(projectId, journeyState);
                     if (route) {
                       setLocation(route);
@@ -576,6 +596,20 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
           </TabsList>
 
           <TabsContent value="overview" className="mt-6">
+            {needsPayment && paymentRoute && (
+              <Card className="border-blue-300 bg-blue-50 mb-6">
+                <CardContent className="py-6 flex items-center justify-between">
+                  <div>
+                    <h3 className="text-lg font-semibold text-blue-900">Journey Complete — Ready for Analysis</h3>
+                    <p className="text-blue-700 text-sm">Your data journey is done. Proceed to payment to run the analysis and see your results.</p>
+                  </div>
+                  <Button className="bg-blue-600 hover:bg-blue-700 ml-4 flex-shrink-0" onClick={() => setLocation(paymentRoute)}>
+                    <CreditCard className="w-4 h-4 mr-2" />
+                    Proceed to Payment
+                  </Button>
+                </CardContent>
+              </Card>
+            )}
             <div className="mb-6 space-y-6">
               <JourneyLifecycleIndicator projectId={projectId} />
               <WorkflowTransparencyDashboard projectId={projectId} />
@@ -773,6 +807,24 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
                   </Button>
                 </CardContent>
               </Card>
+            ) : needsPayment && paymentRoute ? (
+              <Card className="border-blue-200 bg-blue-50">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <CreditCard className="w-5 h-5 text-blue-600" />
+                    Payment Required for Visualizations
+                  </CardTitle>
+                  <CardDescription>
+                    Your journey is complete. Proceed to payment to run the analysis and generate visualizations from your data.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => setLocation(paymentRoute)}>
+                    <CreditCard className="w-4 h-4 mr-2" />
+                    Proceed to Payment
+                  </Button>
+                </CardContent>
+              </Card>
             ) : (
               <Card className="border-amber-200 bg-amber-50">
                 <CardHeader>
@@ -817,6 +869,24 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
                   </p>
                   <Button onClick={() => setLocation(`/projects/${projectId}/results`)}>
                     View Results & Insights
+                  </Button>
+                </CardContent>
+              </Card>
+            ) : needsPayment && paymentRoute ? (
+              <Card className="border-blue-200 bg-blue-50">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <CreditCard className="w-5 h-5 text-blue-600" />
+                    Payment Required for Insights
+                  </CardTitle>
+                  <CardDescription>
+                    Your journey is complete. Proceed to payment to run the analysis and generate AI-powered insights.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => setLocation(paymentRoute)}>
+                    <CreditCard className="w-4 h-4 mr-2" />
+                    Proceed to Payment
                   </Button>
                 </CardContent>
               </Card>

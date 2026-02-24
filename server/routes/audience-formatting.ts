@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { audienceFormatter, AudienceContext } from '../services/audience-formatter';
 import { ensureAuthenticated } from './auth';
+import { storage } from '../storage';
 
 const router = Router();
 
@@ -67,53 +68,113 @@ router.post('/preview-analysis', ensureAuthenticated, async (req, res) => {
       });
     }
 
-    // Generate a preview of what the analysis would look like for this audience
-    const previewPrompt = `Generate a preview of ${analysisType} analysis results formatted for ${audienceContext.primaryAudience} audience.
+    // Load project data for data-aware preview generation
+    let projectContext = { datasetName: '', columnNames: [] as string[], rowCount: 0, questions: [] as string[], goal: '', qualityScore: 0 };
+    try {
+      const project = await storage.getProject(projectId);
+      if (project) {
+        const jp = (project as any).journeyProgress || {};
+        const datasetResults = await storage.getProjectDatasets(projectId);
+        const firstDataset = datasetResults?.[0]?.dataset;
 
-Decision Context: ${audienceContext.decisionContext || 'General analysis'}
+        projectContext.datasetName = (firstDataset as any)?.name || (firstDataset as any)?.fileName || project.fileName || 'your dataset';
+        projectContext.rowCount = (firstDataset as any)?.recordCount || project.recordCount || 0;
+        projectContext.qualityScore = jp.dataQualityScore || (firstDataset as any)?.ingestionMetadata?.qualityScore || 0;
+        projectContext.goal = jp.analysisGoal || jp.requirementsDocument?.analysisGoal || '';
+        projectContext.questions = (jp.userQuestions || []).slice(0, 3).map((q: any) => typeof q === 'string' ? q : q?.text || '');
 
-Provide a brief preview (2-3 sentences) of what the analysis results would include, focusing on:
-- Key insights relevant to this audience
-- Expected recommendations
-- Value proposition for this audience type
+        // Get column names from schema
+        const schema = (firstDataset as any)?.ingestionMetadata?.schema
+          || (firstDataset as any)?.metadata?.schema || {};
+        projectContext.columnNames = Object.keys(schema).slice(0, 6);
+      }
+    } catch (e) {
+      // Non-fatal: fall back to generic preview
+    }
 
-Keep it concise and audience-appropriate.`;
+    const { datasetName, columnNames, rowCount, questions, goal, qualityScore } = projectContext;
+    const colSample = columnNames.length > 0 ? columnNames.slice(0, 3).join(', ') : 'your data fields';
+    const goalPhrase = goal ? ` focused on ${goal}` : '';
+    const rowPhrase = rowCount > 0 ? ` across ${rowCount.toLocaleString()} records` : '';
 
-    // For now, return a structured preview
+    // Generate data-aware preview strings using actual project context
     const audiencePreviews = {
       executive: {
-        summary: `Executive summary highlighting strategic implications and ROI opportunities from ${analysisType} analysis.`,
-        keyInsights: ['Strategic business opportunities', 'Performance improvement potential', 'Competitive advantages'],
-        recommendations: ['High-level strategic initiatives', 'Resource allocation guidance', 'Risk mitigation strategies']
+        summary: `Executive analysis of ${datasetName}${rowPhrase}${goalPhrase}, highlighting strategic implications and ROI opportunities from ${analysisType}.`,
+        keyInsights: [
+          `Strategic patterns in ${colSample}`,
+          `Performance trends and improvement potential${rowPhrase}`,
+          'Competitive positioning and risk factors'
+        ],
+        recommendations: ['High-level strategic initiatives based on findings', 'Resource allocation guidance', 'Risk mitigation strategies']
       },
       technical: {
-        summary: `Detailed technical analysis including statistical methods, data quality assessment, and implementation details for ${analysisType}.`,
-        keyInsights: ['Statistical significance', 'Data quality metrics', 'Model performance indicators'],
-        recommendations: ['Technical implementation steps', 'Data validation requirements', 'Performance optimization']
+        summary: `Detailed ${analysisType} of ${datasetName}${rowPhrase}, including statistical methods, data quality assessment, and implementation details.`,
+        keyInsights: [
+          `Statistical relationships between ${colSample}`,
+          `Data quality assessment (${qualityScore > 0 ? qualityScore + '% quality score' : 'validated'})`,
+          'Model performance and significance metrics'
+        ],
+        recommendations: ['Technical implementation steps', 'Data validation requirements', 'Performance optimization paths']
       },
       business_ops: {
-        summary: `Operational insights and process improvement recommendations from ${analysisType} analysis.`,
-        keyInsights: ['Operational efficiency opportunities', 'Process bottlenecks', 'Performance metrics'],
-        recommendations: ['Process optimization', 'Operational improvements', 'Performance monitoring']
+        summary: `Operational insights from ${datasetName}${goalPhrase}, with process improvement recommendations from ${analysisType} analysis.`,
+        keyInsights: [
+          `Operational patterns in ${colSample}`,
+          'Process efficiency opportunities',
+          'Performance benchmarks and metrics'
+        ],
+        recommendations: ['Process optimization based on findings', 'Operational improvements', 'Performance monitoring setup']
       },
       marketing: {
-        summary: `Customer behavior insights and marketing strategy recommendations from ${analysisType} analysis.`,
-        keyInsights: ['Customer behavior patterns', 'Campaign performance', 'Segmentation opportunities'],
-        recommendations: ['Campaign optimization', 'Customer targeting', 'Marketing strategy adjustments']
+        summary: `Behavioral insights from ${datasetName}${goalPhrase}, with ${analysisType}-driven marketing recommendations.`,
+        keyInsights: [
+          `Behavioral patterns across ${colSample}`,
+          'Segmentation opportunities',
+          'Campaign performance indicators'
+        ],
+        recommendations: ['Campaign optimization strategies', 'Targeting refinements', 'Marketing ROI improvements']
       },
       mixed: {
-        summary: `Comprehensive analysis results with executive summary, technical details, and actionable recommendations for ${analysisType}.`,
-        keyInsights: ['Multi-perspective insights', 'Cross-functional opportunities', 'Strategic and tactical findings'],
-        recommendations: ['Executive-level strategy', 'Technical implementation', 'Operational improvements']
+        summary: `Comprehensive ${analysisType} of ${datasetName}${rowPhrase}${goalPhrase}, with executive summary, technical details, and actionable recommendations.`,
+        keyInsights: [
+          `Key patterns across ${colSample}`,
+          `Data-driven findings${rowPhrase}`,
+          'Strategic and tactical opportunities'
+        ],
+        recommendations: [
+          `Strategic actions based on ${analysisType} findings`,
+          'Implementation roadmap',
+          'Operational next steps'
+        ]
       }
     };
 
-  const primaryAudience = (audienceContext.primaryAudience || 'mixed') as keyof typeof audiencePreviews;
-  const preview = audiencePreviews[primaryAudience] || audiencePreviews.mixed;
+    const primaryAudience = (audienceContext.primaryAudience || 'mixed') as keyof typeof audiencePreviews;
+    const preview = audiencePreviews[primaryAudience] || audiencePreviews.mixed;
+
+    // Derive confidence from data quality and analysis complexity
+    const baseConfidence = qualityScore > 0 ? Math.min(0.95, qualityScore / 100) : 0.80;
+    const confidence = Math.round(baseConfidence * 100) / 100;
+
+    // Derive visualization types from analysis type
+    const vizMap: Record<string, string[]> = {
+      correlation: ['Correlation Heatmap', 'Scatter Plot Matrix', 'Variable Importance Chart'],
+      regression: ['Regression Line Chart', 'Residual Plot', 'Coefficient Impact Chart'],
+      clustering: ['Cluster Visualization', 'Silhouette Plot', 'Feature Importance'],
+      time_series: ['Trend Analysis Chart', 'Seasonal Decomposition', 'Forecast Plot'],
+      comparative: ['Group Comparison Chart', 'Box Plot Analysis', 'Effect Size Visualization'],
+      descriptive: ['Distribution Charts', 'Summary Statistics Dashboard', 'Key Metrics Overview'],
+      statistical: ['Statistical Test Results', 'Distribution Analysis', 'Confidence Intervals'],
+    };
+    const normalizedType = (analysisType || '').toLowerCase().replace(/[^a-z_]/g, '_');
+    const sampleVisualizations = vizMap[normalizedType] || ['Data Overview Dashboard', 'Key Metrics Chart', 'Trend Analysis'];
 
     res.json({
       success: true,
       preview,
+      confidence,
+      sampleVisualizations,
       audienceContext: {
         primaryAudience: audienceContext.primaryAudience,
         secondaryAudiences: audienceContext.secondaryAudiences || [],

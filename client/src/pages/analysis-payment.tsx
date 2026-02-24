@@ -309,31 +309,15 @@ export default function AnalysisPaymentPage({ projectId, projectData: providedPr
   const calculatePricing = async () => {
     setIsCalculating(true);
     setIntentMetrics(null);
+
+    // PHASE 11 FIX: First check for locked cost from SSOT (journeyState or journeyProgress)
+    // FIX: Use Number() coercion instead of typeof check (handles string values from JSONB)
+    const rawLockedCost = journeyState?.costs?.estimated ?? (journeyProgress as any)?.lockedCostEstimate;
+    const lockedCost = rawLockedCost != null ? Number(rawLockedCost) : null;
+    const hasLockedCost = lockedCost != null && Number.isFinite(lockedCost) && lockedCost > 0;
+
     try {
-      // PHASE 11 FIX: First check for locked cost from SSOT (journeyState or journeyProgress)
-      const lockedCost = journeyState?.costs?.estimated ||
-                         (journeyProgress as any)?.lockedCostEstimate;
-
-      if (typeof lockedCost === 'number' && lockedCost > 0) {
-        console.log(`✅ [Payment] Using locked cost from SSOT: $${lockedCost.toFixed(2)}`);
-        setPricing({
-          finalPrice: lockedCost,
-          priceInCents: Math.round(lockedCost * 100),
-          breakdown: {
-            basePrice: lockedCost,
-            dataSizeCharge: 0,
-            complexityCharge: 0,
-            questionsCharge: 0,
-            analysisTypeCharge: 0
-          },
-          source: 'locked'
-        });
-        setDataComplexity(projectData.recordCount > 100000 ? 'complex' : projectData.recordCount > 10000 ? 'moderate' : 'simple');
-        setIsCalculating(false);
-        return;
-      }
-
-      // Only call API if no locked cost exists
+      // Always call API for the line-item breakdown (even when locked cost exists)
       const response = await apiRequest("POST", "/api/analysis-payment/calculate", {
         dataSizeMB: projectData.dataSizeMB,
         questionsCount: projectData.questions.length,
@@ -347,8 +331,20 @@ export default function AnalysisPaymentPage({ projectId, projectData: providedPr
         throw new Error(data?.error || 'Pricing request failed');
       }
 
-      setPricing(data.pricing ?? null);
-      setDataComplexity(data.dataComplexity ?? '');
+      if (hasLockedCost) {
+        // Use API breakdown for display, but override total with locked cost
+        console.log(`✅ [Payment] Using locked cost $${lockedCost.toFixed(2)} with API breakdown`);
+        setPricing({
+          ...(data.pricing ?? {}),
+          finalPrice: lockedCost,
+          priceInCents: Math.round(lockedCost * 100),
+          source: 'locked' as const
+        });
+        setDataComplexity(data.dataComplexity ?? (projectData.recordCount > 100000 ? 'complex' : projectData.recordCount > 10000 ? 'moderate' : 'simple'));
+      } else {
+        setPricing(data.pricing ?? null);
+        setDataComplexity(data.dataComplexity ?? '');
+      }
     } catch (error: any) {
       console.error("Pricing calculation error:", error);
 
@@ -359,7 +355,9 @@ export default function AnalysisPaymentPage({ projectId, projectData: providedPr
       const questionsCharge = Math.max(0, (projectData.questions.length - 3) * 1.00);
       const analysisTypeCharge = analysisType === 'advanced' ? 10.00 : analysisType === 'custom' ? 20.00 : 0;
 
-      const finalPrice = basePrice + dataSizeCharge + complexityCharge + questionsCharge + analysisTypeCharge;
+      const calculatedPrice = basePrice + dataSizeCharge + complexityCharge + questionsCharge + analysisTypeCharge;
+      // If locked cost exists, use it as the total even in fallback
+      const finalPrice = hasLockedCost ? lockedCost : calculatedPrice;
 
       setPricing({
         finalPrice,
@@ -371,7 +369,7 @@ export default function AnalysisPaymentPage({ projectId, projectData: providedPr
           questionsCharge,
           analysisTypeCharge
         },
-        source: 'calculated'
+        source: hasLockedCost ? 'locked' : 'calculated'
       });
 
       setDataComplexity(projectData.recordCount > 100000 ? 'complex' : projectData.recordCount > 10000 ? 'moderate' : 'simple');
@@ -723,11 +721,11 @@ export default function AnalysisPaymentPage({ projectId, projectData: providedPr
                     <Separator />
                     <div className="flex justify-between text-lg font-semibold">
                       <span>Total</span>
-                      <span>{formatCurrency(pricing.source === 'locked' ? (chargeableCents ?? toCents(pricing.finalPrice)) : toCents(pricing.finalPrice))}</span>
+                      <span>{formatCurrency(chargeableCents ?? toCents(pricing.finalPrice))}</span>
                     </div>
-                    {pricing.source === 'locked' && chargeableCents !== null && chargeableCents !== toCents(pricing.finalPrice) && (
+                    {pricing.source === 'locked' && (
                       <p className="text-sm text-muted-foreground">
-                        Remaining balance from locked estimate.
+                        Locked estimate from your journey.
                       </p>
                     )}
                     <div className="flex items-center gap-2 text-sm text-muted-foreground">
