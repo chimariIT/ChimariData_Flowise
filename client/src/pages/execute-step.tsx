@@ -1086,6 +1086,11 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
       setSelectedAnalyses(analysesToExecute);
     }
 
+    // Preserve the DS agent's original analysisPath metadata (requiredDataElements, dependencies, etc.)
+    // instead of always rebuilding a minimal path from just the type IDs
+    const reqDoc = (journeyProgress as any)?.requirementsDocument;
+    const originalAnalysisPath: any[] = reqDoc?.analysisPath || (journeyProgress as any)?.analysisPath || [];
+
     // Phase 3 - Task 3.3: Show checkpoint dialog first
     // FIX P1-1: Use override if provided to handle async state timing
     const isApproved = isApprovedOverride ?? checkpointApproved;
@@ -1164,12 +1169,23 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         executionConfig: {
           selectedAnalyses: analysesToExecute,
           // FIX 4: Persist analysisPath in object-array format for cost estimation compatibility
+          // Preserve DS agent metadata (requiredDataElements, dependencies, etc.) when available
           // server/routes/project.ts reads executionConfig.analysisPath as [{analysisId, analysisType, ...}]
-          analysisPath: analysesToExecute.map(id => ({
-            analysisId: id,
-            analysisType: id,
-            analysisName: id.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()),
-          })),
+          analysisPath: analysesToExecute.map(id => {
+            // Try to find the original DS entry with full metadata
+            const dsEntry = originalAnalysisPath.find(
+              (a: any) => (a.analysisType || a.type || a.analysisId) === id
+            );
+            if (dsEntry) {
+              return { ...dsEntry, analysisId: id, analysisType: id };
+            }
+            // Fallback: minimal entry for types not in DS path
+            return {
+              analysisId: id,
+              analysisType: id,
+              analysisName: id.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()),
+            };
+          }),
           confirmedAt: new Date().toISOString(),
           executionParams: {
             journeyType,

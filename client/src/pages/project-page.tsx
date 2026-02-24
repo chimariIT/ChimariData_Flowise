@@ -265,7 +265,8 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
     };
 
     handlePaymentCallback();
-  }, [currentSearch, projectId, location, setLocation]);
+    // project is needed: lines 197-202 read journeyProgress/analysisPath, lines 228-230 read journeyType
+  }, [currentSearch, projectId, location, setLocation, project]);
 
   useEffect(() => {
     const params = new URLSearchParams(currentSearch);
@@ -292,7 +293,15 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
   useEffect(() => {
     if (!project || isLoading || hasRedirectedToResultsRef.current) return;
     const jp = (project as any)?.journeyProgress;
-    const hasResults = !!(project as any)?.analysisResults || jp?.executionStatus === 'completed';
+    const ar = (project as any)?.analysisResults;
+    // Require analysisResults to have actual content (insights, statuses, or questionAnswers)
+    // to avoid redirecting before the results endpoint has data ready
+    const hasPopulatedResults = ar && (
+      (Array.isArray(ar.insights) && ar.insights.length > 0) ||
+      (Array.isArray(ar.analysisStatuses) && ar.analysisStatuses.length > 0) ||
+      ar.questionAnswers
+    );
+    const hasResults = hasPopulatedResults || (jp?.executionStatus === 'completed' && !!ar);
     // Only redirect if user didn't explicitly navigate to a specific tab
     const params = new URLSearchParams(currentSearch);
     const hasExplicitTab = params.has('tab');

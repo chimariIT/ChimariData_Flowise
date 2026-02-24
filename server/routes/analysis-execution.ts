@@ -242,19 +242,21 @@ router.post('/execute', ensureAuthenticated, async (req, res) => {
       }
 
       // Step 3: Check and track quota usage (unless preview only)
+      // Track ALL analysis types, not just the first, to prevent under-charging for multi-analysis execution
       if (!previewOnly) {
         const analysisType = analysisTypes?.[0] || 'statistical_analysis';
         const complexity = determineComplexity(project);
         trackedFeatureId = analysisType;
         trackedComplexity = complexity;
+        const analysisCount = analysisTypes.length || 1;
 
-        console.log(`📊 [Billing] Checking quota for ${analysisType} (${complexity}) - tier: ${userTier}`);
+        console.log(`📊 [Billing] Checking quota for ${analysisCount} analyses [${analysisTypes.join(', ')}] (${complexity}) - tier: ${userTier}`);
 
         const usageResult = await billingService.trackFeatureUsage(
           userId,
           analysisType,
           complexity,
-          1 // quantity
+          analysisCount // quantity: track ALL requested analyses, not just 1
         );
 
         if (!usageResult.allowed) {

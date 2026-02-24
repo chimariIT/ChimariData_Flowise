@@ -145,7 +145,11 @@ export default function UserDashboard({ user, onLogout }: UserDashboardProps) {
 
   const handleViewProject = (projectId: string, project?: DashboardProject) => {
     // Completed projects → results page; in-progress → monitoring dashboard
-    const isCompleted = project?.status === 'completed';
+    // Check multiple indicators since completion is expressed via status, analysisResults, or executionStatus
+    const p = project as any;
+    const isCompleted = project?.status === 'completed'
+      || !!p?.analysisResults
+      || p?.journeyProgress?.executionStatus === 'completed';
     if (isCompleted) {
       setLocation(`/projects/${projectId}/results`);
     } else {
