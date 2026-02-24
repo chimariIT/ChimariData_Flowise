@@ -465,9 +465,21 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
     // Restore PII decisions by file
     if (journeyProgress.piiDecisionsByFile && Object.keys(journeyProgress.piiDecisionsByFile).length > 0) {
       setPiiDecisionsByFile(journeyProgress.piiDecisionsByFile);
-      setPiiReviewCompleted(true);
+      // Only mark review complete if ALL uploaded files have decisions
+      // (not just "any" file — prevents bypass after partial review + refresh)
+      const decisionFileNames = new Set(Object.keys(journeyProgress.piiDecisionsByFile));
+      const validatedFileNames = Object.keys(dataValidation);
+      const allFilesReviewed = validatedFileNames.length > 0
+        && validatedFileNames.every(name => decisionFileNames.has(name));
+      if (allFilesReviewed) {
+        setPiiReviewCompleted(true);
+      }
     } else if (journeyProgress.piiDecision) {
-      setPiiReviewCompleted(true);
+      // Legacy single-file mode: if there's exactly 1 file, this is sufficient
+      const validatedFileCount = Object.keys(dataValidation).length;
+      if (validatedFileCount <= 1) {
+        setPiiReviewCompleted(true);
+      }
     }
     // Restore excluded columns
     if (journeyProgress.piiDecision?.excludedColumns?.length > 0) {
@@ -477,7 +489,7 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
     if (journeyProgress.dataQualityApproved) {
       setDataQualityApproved(true);
     }
-  }, [journeyProgress]);
+  }, [journeyProgress, dataValidation]);
 
   const getJourneyTypeInfo = () => {
     switch (journeyType) {
@@ -976,8 +988,14 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
 
         if (backendSchemaRaw && typeof backendSchemaRaw === 'object') {
           Object.entries(backendSchemaRaw).forEach(([key, value]) => {
-            if (value && typeof value === 'object' && (value as any).type) {
-              schema[key] = (value as any).type;
+            if (value && typeof value === 'object') {
+              // Support multiple field naming conventions from different backends:
+              // { type: "string" }, { dataType: "varchar" }, { dtype: "object" }
+              const v = value as any;
+              const typeStr = v.type || v.dataType || v.dtype;
+              if (typeStr) {
+                schema[key] = String(typeStr);
+              }
             } else if (typeof value === 'string') {
               schema[key] = value;
             }
@@ -1040,7 +1058,7 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
             totalColumns: columns,
             missingValues,
             duplicateRows: 0,
-            qualityScore: qualityScore || 93
+            qualityScore: qualityScore
           }
         }));
 
@@ -1722,7 +1740,17 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
             onClick={handleContinue}
             className="bg-blue-600 hover:bg-blue-700"
             size="lg"
-            disabled={isUpdating || piiQueue.length > 0 || (!piiReviewCompleted && !journeyProgress?.piiDecision && !(journeyProgress?.piiDecisionsByFile && Object.keys(journeyProgress.piiDecisionsByFile).length > 0))}
+            disabled={isUpdating || piiQueue.length > 0 || (() => {
+              // Require PII decisions for ALL uploaded files, not just any
+              if (piiReviewCompleted) return false; // Already validated
+              const decisionKeys = new Set([
+                ...Object.keys(piiDecisionsByFile),
+                ...Object.keys(journeyProgress?.piiDecisionsByFile || {}),
+              ]);
+              const validatedFileNames = Object.keys(dataValidation);
+              if (validatedFileNames.length === 0) return true; // No files = disabled
+              return !validatedFileNames.every(name => decisionKeys.has(name));
+            })()}
           >
             {isUpdating ? 'Saving...' : piiQueue.length > 0 ? 'PII Review In Progress...' : 'Continue to Analysis Preparation'}
             <ArrowRight className="w-4 h-4 ml-2" />

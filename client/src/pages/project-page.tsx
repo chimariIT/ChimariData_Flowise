@@ -52,19 +52,28 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
   // Feature flag defaults to false for safety - only enable when explicitly set
   const enableSlaMetrics = import.meta.env.VITE_FEATURE_SLA_METRICS === 'true';
 
+  // SLA metrics: endpoint /api/performance/metrics/my-uploads is NOT currently registered
+  // in the server routes. This query is gated behind VITE_FEATURE_SLA_METRICS=true.
+  // When the performance router is re-enabled, register it in server/routes/index.ts.
   const { data: uploadMetricsSummary, isLoading: isUploadMetricsLoading } = useQuery({
     queryKey: ['performance-metrics', projectId],
     queryFn: async () => {
       try {
         const response = await apiClient.get('/api/performance/metrics/my-uploads?timeWindow=3600000');
         return response?.summary ?? null;
-      } catch (metricsError) {
-        console.warn('Failed to load upload SLA metrics:', metricsError);
+      } catch (metricsError: any) {
+        // Expected 404 until performance router is re-registered
+        if (metricsError?.status === 404 || metricsError?.message?.includes('404')) {
+          console.warn('[SLA] Performance metrics endpoint not registered — disable VITE_FEATURE_SLA_METRICS or register the performance router');
+        } else {
+          console.warn('Failed to load upload SLA metrics:', metricsError);
+        }
         return null;
       }
     },
     refetchInterval: 60000,
-    enabled: enableSlaMetrics
+    enabled: enableSlaMetrics,
+    retry: false  // Don't retry 404s
   });
 
   // Get journey state to determine which tabs to show
