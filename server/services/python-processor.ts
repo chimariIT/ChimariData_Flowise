@@ -1,6 +1,7 @@
 // Enhanced PythonProcessor service that uses REAL Python libraries
 import { spawn } from 'child_process';
-import { SocketManager } from '../socket-manager';
+// JO-3 FIX: Replaced deprecated SocketManager (Socket.IO) with native ws RealtimeServer
+import { getRealtimeServer } from '../realtime';
 
 export const PythonProcessor = {
   async initialize(): Promise<void> {
@@ -66,12 +67,15 @@ export const PythonProcessor = {
   async processTrial(trialId: string, data: any): Promise<any> {
     console.log(`🐍 Processing trial ${trialId} with REAL Python libraries (Pandas, NumPy, Scikit-learn, TensorFlow, Polars)...`);
 
-    // Emit start event
-    SocketManager.getInstance().emitToProject(trialId, 'execution_progress', {
+    // JO-3 FIX: Use native ws RealtimeServer instead of deprecated SocketManager
+    getRealtimeServer()?.broadcastToProject(trialId, {
+      type: 'progress',
+      sourceType: 'analysis',
+      sourceId: 'python_analysis',
+      userId: '',
       projectId: trialId,
-      status: 'running',
-      overallProgress: 10,
-      currentStep: { id: 'python_analysis', name: 'Running Python Analysis', status: 'running', description: 'Executing advanced analytics...' }
+      timestamp: new Date(),
+      data: { projectId: trialId, status: 'running', overallProgress: 10, currentStep: { id: 'python_analysis', name: 'Running Python Analysis', status: 'running', description: 'Executing advanced analytics...' } }
     });
 
     try {
@@ -90,12 +94,15 @@ export const PythonProcessor = {
       if (pythonResult.success) {
         console.log(`✅ Real Python analysis completed for trial ${trialId}`);
 
-        // Emit completion event
-        SocketManager.getInstance().emitToProject(trialId, 'execution_progress', {
+        // JO-3 FIX: Use native ws RealtimeServer instead of deprecated SocketManager
+        getRealtimeServer()?.broadcastToProject(trialId, {
+          type: 'progress',
+          sourceType: 'analysis',
+          sourceId: 'python_analysis',
+          userId: '',
           projectId: trialId,
-          status: 'completed',
-          overallProgress: 100,
-          currentStep: { id: 'python_analysis', name: 'Python Analysis', status: 'completed', description: 'Analysis completed successfully.' }
+          timestamp: new Date(),
+          data: { projectId: trialId, status: 'completed', overallProgress: 100, currentStep: { id: 'python_analysis', name: 'Python Analysis', status: 'completed', description: 'Analysis completed successfully.' } }
         });
 
         return pythonResult;

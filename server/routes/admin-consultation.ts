@@ -14,51 +14,17 @@ import { db } from '../db';
 import { consultationRequests, users } from '@shared/schema';
 import { eq, and, desc, inArray } from 'drizzle-orm';
 import { ensureAuthenticated } from './auth';
+import { requireAdmin } from '../middleware/rbac';
 
 const router = Router();
 
 type ConsultationRequest = typeof consultationRequests.$inferSelect;
 
 /**
- * Middleware to ensure user is admin
- */
-async function ensureAdmin(req: any, res: any, next: any) {
-  try {
-    const userId = req.user?.id;
-    if (!userId) {
-      return res.status(401).json({ error: 'User not authenticated' });
-    }
-
-    // Fetch user with role
-    const [user] = await db
-      .select()
-      .from(users)
-      .where(eq(users.id, userId));
-
-    if (!user) {
-      return res.status(401).json({ error: 'User not found' });
-    }
-
-    // Check if user has admin role
-    // Note: Adjust this check based on your actual role structure
-    if (user.role !== 'admin' && user.role !== 'super_admin') {
-      return res.status(403).json({ error: 'Admin access required' });
-    }
-
-    // Attach user to request for downstream handlers
-    req.adminUser = user;
-    next();
-  } catch (error: any) {
-    console.error('Error in ensureAdmin middleware:', error);
-    res.status(500).json({ error: 'Authorization check failed' });
-  }
-}
-
-/**
  * GET /api/admin/consultations/pending-quotes
  * List consultation requests awaiting quotes
  */
-router.get('/pending-quotes', ensureAuthenticated, ensureAdmin, async (req, res) => {
+router.get('/pending-quotes', ensureAuthenticated, requireAdmin, async (req, res) => {
   try {
     const pendingRequests = await db
       .select({
@@ -96,7 +62,7 @@ router.get('/pending-quotes', ensureAuthenticated, ensureAdmin, async (req, res)
  * POST /api/admin/consultations/:id/quote
  * Create and send a quote for a consultation request
  */
-router.post('/:id/quote', ensureAuthenticated, ensureAdmin, async (req, res) => {
+router.post('/:id/quote', ensureAuthenticated, requireAdmin, async (req, res) => {
   try {
     const adminId = req.adminUser?.id;
     const { id } = req.params;
@@ -159,7 +125,7 @@ router.post('/:id/quote', ensureAuthenticated, ensureAdmin, async (req, res) => 
  * GET /api/admin/consultations/ready-queue
  * List consultations ready for admin pickup
  */
-router.get('/ready-queue', ensureAuthenticated, ensureAdmin, async (req, res) => {
+router.get('/ready-queue', ensureAuthenticated, requireAdmin, async (req, res) => {
   try {
     const readyRequests = await db
       .select({
@@ -200,7 +166,7 @@ router.get('/ready-queue', ensureAuthenticated, ensureAdmin, async (req, res) =>
  * GET /api/admin/consultations/my-assignments
  * List consultations assigned to the current admin
  */
-router.get('/my-assignments', ensureAuthenticated, ensureAdmin, async (req, res) => {
+router.get('/my-assignments', ensureAuthenticated, requireAdmin, async (req, res) => {
   try {
     const adminId = req.adminUser?.id;
 
@@ -252,7 +218,7 @@ router.get('/my-assignments', ensureAuthenticated, ensureAdmin, async (req, res)
  * POST /api/admin/consultations/:id/assign
  * Assign a consultation to an admin (or self-assign)
  */
-router.post('/:id/assign', ensureAuthenticated, ensureAdmin, async (req, res) => {
+router.post('/:id/assign', ensureAuthenticated, requireAdmin, async (req, res) => {
   try {
     const adminId = req.adminUser?.id;
     const { id } = req.params;
@@ -311,7 +277,7 @@ router.post('/:id/assign', ensureAuthenticated, ensureAdmin, async (req, res) =>
  * POST /api/admin/consultations/:id/schedule
  * Schedule a consultation session
  */
-router.post('/:id/schedule', ensureAuthenticated, ensureAdmin, async (req, res) => {
+router.post('/:id/schedule', ensureAuthenticated, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { scheduledAt } = req.body;
@@ -365,7 +331,7 @@ router.post('/:id/schedule', ensureAuthenticated, ensureAdmin, async (req, res) 
  * POST /api/admin/consultations/:id/complete
  * Mark a consultation as complete with deliverables
  */
-router.post('/:id/complete', ensureAuthenticated, ensureAdmin, async (req, res) => {
+router.post('/:id/complete', ensureAuthenticated, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { sessionNotes, deliverables } = req.body;
@@ -419,7 +385,7 @@ router.post('/:id/complete', ensureAuthenticated, ensureAdmin, async (req, res) 
  * GET /api/admin/consultations/all
  * List all consultations with filtering
  */
-router.get('/all', ensureAuthenticated, ensureAdmin, async (req, res) => {
+router.get('/all', ensureAuthenticated, requireAdmin, async (req, res) => {
   try {
     const { status, assignedTo } = req.query;
 
@@ -454,7 +420,7 @@ router.get('/all', ensureAuthenticated, ensureAdmin, async (req, res) => {
  * GET /api/admin/consultations/stats
  * Get consultation statistics for admin dashboard
  */
-router.get('/stats', ensureAuthenticated, ensureAdmin, async (req, res) => {
+router.get('/stats', ensureAuthenticated, requireAdmin, async (req, res) => {
   try {
     const allRequests: ConsultationRequest[] = await db.select().from(consultationRequests);
 

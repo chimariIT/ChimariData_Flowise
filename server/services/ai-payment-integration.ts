@@ -515,8 +515,14 @@ export class AIPaymentIntegrationService {
   }
 
   private static async getCurrentRequestTypeUsage(context: PaymentContext): Promise<number> {
-    // Mock implementation - in production would query actual usage
-    return 0;
+    // P1-5 FIX: Fetch real usage via the existing getCurrentUsageCount mapper
+    try {
+      const { UsageTrackingService } = await import('./usage-tracking');
+      const currentUsage = await UsageTrackingService.getCurrentUsage(context.userId);
+      return this.getCurrentUsageCount(currentUsage, context.requestType);
+    } catch {
+      return 0;
+    }
   }
 
   private static getCurrentUsageCount(currentUsage: any, requestType: string): number {

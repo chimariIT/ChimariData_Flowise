@@ -281,13 +281,17 @@ Respond with ONLY the JSON object.`;
       status: 'pending'
     };
 
-    // Store in project's journeyProgress (atomic merge to prevent race conditions)
+    // Store in project's journeyProgress
     const project = await storage.getProject(projectId);
     if (project) {
-      await storage.atomicMergeJourneyProgress(projectId, {
-        pendingClarifications: request,
-        awaitingUserInput: true
-      });
+      const journeyProgress = (project as any).journeyProgress || {};
+      await storage.updateProject(projectId, {
+        journeyProgress: {
+          ...journeyProgress,
+          pendingClarifications: request,
+          awaitingUserInput: true
+        }
+      } as any);
 
       console.log(`📋 [Clarification] Created request with ${questions.length} questions for project ${projectId}`);
     }
@@ -354,27 +358,30 @@ Respond with ONLY the JSON object.`;
       answers
     );
 
-    // Update project (atomic merge to prevent race conditions)
+    // Update project
     const journeyProgress = (project as any).journeyProgress || {};
-    await storage.atomicMergeJourneyProgress(projectId, {
-      pendingClarifications: {
-        ...pending,
-        status: 'answered',
-        answers,
-        answeredAt: new Date().toISOString()
-      },
-      clarificationHistory: [
-        ...(journeyProgress.clarificationHistory || []),
-        {
-          originalInput: pending.originalInput,
-          questions: pending.questions,
+    await storage.updateProject(projectId, {
+      journeyProgress: {
+        ...journeyProgress,
+        pendingClarifications: {
+          ...pending,
+          status: 'answered',
           answers,
-          revisedInput,
-          completedAt: new Date().toISOString()
-        }
-      ],
-      awaitingUserInput: false
-    });
+          answeredAt: new Date().toISOString()
+        },
+        clarificationHistory: [
+          ...(journeyProgress.clarificationHistory || []),
+          {
+            originalInput: pending.originalInput,
+            questions: pending.questions,
+            answers,
+            revisedInput,
+            completedAt: new Date().toISOString()
+          }
+        ],
+        awaitingUserInput: false
+      }
+    } as any);
 
     console.log(`✅ [Clarification] Answers submitted for project ${projectId}`);
 
@@ -396,14 +403,17 @@ Respond with ONLY the JSON object.`;
 
     if (!pending) return false;
 
-    await storage.atomicMergeJourneyProgress(projectId, {
-      pendingClarifications: {
-        ...pending,
-        status: 'skipped',
-        skippedAt: new Date().toISOString()
-      },
-      awaitingUserInput: false
-    });
+    await storage.updateProject(projectId, {
+      journeyProgress: {
+        ...journeyProgress,
+        pendingClarifications: {
+          ...pending,
+          status: 'skipped',
+          skippedAt: new Date().toISOString()
+        },
+        awaitingUserInput: false
+      }
+    } as any);
 
     console.log(`⏭️ [Clarification] Skipped for project ${projectId}`);
     return true;
@@ -414,13 +424,16 @@ Respond with ONLY the JSON object.`;
     if (!project) return;
 
     const journeyProgress = (project as any).journeyProgress || {};
-    await storage.atomicMergeJourneyProgress(projectId, {
-      pendingClarifications: {
-        ...journeyProgress.pendingClarifications,
-        status: 'expired'
-      },
-      awaitingUserInput: false
-    });
+    await storage.updateProject(projectId, {
+      journeyProgress: {
+        ...journeyProgress,
+        pendingClarifications: {
+          ...journeyProgress.pendingClarifications,
+          status: 'expired'
+        },
+        awaitingUserInput: false
+      }
+    } as any);
   }
 
   // ==========================================

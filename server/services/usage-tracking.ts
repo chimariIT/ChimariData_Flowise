@@ -295,7 +295,9 @@ export class UsageTrackingService {
     // Track consultation minutes
     const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
     const currentUsage = user[0]?.consultationMinutes || 0;
-    const limit = 60; // Hardcoded limit for now, should come from subscription
+    // P2-7 FIX: Fetch tier-based consultation limit instead of hardcoded 60
+    const userLimits = await this.getUserLimits(userId);
+    const limit = userLimits.consultationMinutesIncluded || 60;
 
     if (currentUsage + minutes > limit) {
       return {

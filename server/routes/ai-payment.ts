@@ -96,40 +96,20 @@ router.get('/history', ensureAuthenticated, async (req, res) => {
     const userId = (req.user as any)?.id;
     const { period = 'month', page = 1, limit = 10 } = req.query;
 
-    // Mock payment history - in production would query actual payment records
+    // P1-2 FIX: Return honest empty results instead of fabricated transactions
+    // Real payment history will be populated once Stripe integration processes actual transactions
     const paymentHistory = {
-      transactions: [
-        {
-          id: 'txn_001',
-          date: new Date().toISOString(),
-          description: 'AI Query - Advanced Analysis',
-          amount: 0.15,
-          currency: 'USD',
-          paymentModel: 'pay_per_use',
-          featureType: 'advanced_analysis',
-          status: 'completed'
-        },
-        {
-          id: 'txn_002',
-          date: new Date(Date.now() - 86400000).toISOString(),
-          description: 'Code Generation Service',
-          amount: 0.25,
-          currency: 'USD',
-          paymentModel: 'pay_per_use',
-          featureType: 'code_generation',
-          status: 'completed'
-        }
-      ],
+      transactions: [] as any[],
       summary: {
-        totalSpent: 0.40,
-        totalTransactions: 2,
-        averageTransactionAmount: 0.20,
+        totalSpent: 0,
+        totalTransactions: 0,
+        averageTransactionAmount: 0,
         period: period as string
       },
       pagination: {
         currentPage: parseInt(page as string),
-        totalPages: 1,
-        totalItems: 2,
+        totalPages: 0,
+        totalItems: 0,
         itemsPerPage: parseInt(limit as string)
       }
     };

@@ -1,6 +1,6 @@
 # Agentic System Guide
 
-**Part of ChimariData Documentation** | [← Back to Main](../CLAUDE.md) | **Last Updated**: February 13, 2026
+**Part of ChimariData Documentation** | [← Back to Main](../CLAUDE.md) | **Last Updated**: February 23, 2026
 
 This document covers the multi-agent architecture, tool-based system, MCP integration, agent coordination, and development patterns.
 
@@ -81,11 +81,13 @@ The platform has **7 specialized agents**:
 See [MCP_TOOL_STATUS.md](MCP_TOOL_STATUS.md) for the full tool-by-tool matrix.
 
 ### Known Gaps (Feb 2026)
-- **Agent Activity Messages**: Hardcoded static strings in `agents.ts:59-70` and `agent-coordination-service.ts:325-532`. Users see generic status updates.
 - **Socket.IO removed**: Dual-emission to both ws and Socket.IO was causing message duplication. Now uses native `ws` only (per CLAUDE.md).
-- **Business Agent translation**: Post-execution BA translation happens client-side only, not as part of the server-side agent workflow.
 - **Tool input validation**: `executeTool()` does not validate input against registered `inputSchema` before routing.
 - **Intent-based discovery**: `findToolsByIntent()` uses keyword matching only, not semantic similarity.
+
+### Resolved Gaps
+- ~~**Agent Activity Messages**~~: Dynamic context-aware messages and tool-level events now replace hardcoded static strings.
+- ~~**Business Agent translation**~~: BA now has 3 registered MCP tools (`ba_translate_results`, `ba_assess_business_impact`, `ba_generate_industry_insights`) for server-side post-execution translation, business impact assessment, and industry insight generation.
 
 ---
 
@@ -673,6 +675,13 @@ User Questions
 │ DATA ENGINEER AGENT: Prepare data                               │
 │ Input: DS requirements + uploaded datasets                      │
 │ Output: { transformationPlan, joinStrategy, qualityReport }     │
+└─────────────────────────────────────────────────────────────────┘
+     │
+     ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ KNOWLEDGE ENRICHMENT (optional): After data verification,       │
+│ knowledge graph enrichment can be triggered to add industry     │
+│ context, business definitions, and domain metadata.             │
 └─────────────────────────────────────────────────────────────────┘
      │
      ▼

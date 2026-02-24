@@ -287,35 +287,17 @@ ${statsNote}`,
 };
 
 // Advanced analysis endpoints
+// @deprecated — Use POST /api/analysis-execution/execute instead (comprehensive pipeline with Python scripts)
+// This endpoint uses the legacy MCPAIService which does basic AI-only analysis without proper data pipeline.
 router.post("/step-by-step-analysis",
     ensureAuthenticated,
-    AIAccessControlService.validateAIFeatureAccess('advanced_analysis'),
-    AIAccessControlService.trackAIFeatureUsage('advanced_analysis'),
     async (req: Request, res: Response) => {
-        try {
-            const { projectId, analysisType, analysisPath, config } = req.body;
-            if (!projectId) {
-                return res.status(400).json({ error: "Project ID is required" });
-            }
-            const project = await storage.getProject(projectId);
-            if (!project) {
-                return res.status(404).json({ error: "Project not found" });
-            }
-            const result = await MCPAIService.performStepByStepAnalysis(project, analysisType, analysisPath, config);
-            await storage.updateProject(projectId, {
-                [`analysis_${analysisType}`]: {
-                    question: config.question,
-                    targetVariable: config.targetVariable,
-                    multivariateVariables: config.multivariateVariables,
-                    analysisType: config.analysisType,
-                    results: result,
-                    analysisPath: analysisPath,
-                }
-            });
-            res.json({ success: true, result });
-        } catch (error: any) {
-            res.status(500).json({ error: error.message });
-        }
+        console.warn('[DEPRECATED] POST /api/ai/step-by-step-analysis called — use POST /api/analysis-execution/execute instead');
+        res.status(410).json({
+            error: 'This endpoint is deprecated. Use POST /api/analysis-execution/execute for comprehensive analysis.',
+            deprecated: true,
+            migration: 'POST /api/analysis-execution/execute with body: { projectId, analysisName, analysisType, config }'
+        });
     });
 
 // Time series analysis endpoint
@@ -836,12 +818,23 @@ router.post("/query",
                 success: true,
                 response: responseText,
                 provider: aiResult.provider,
-                usage: {
-                    // Mock usage data for now, or fetch from service if available
-                    remaining: 100, // Placeholder
-                    quota: 100,
-                    current: 0
-                }
+                usage: await (async () => {
+                    // P1-3 FIX: Fetch real usage from UsageTrackingService
+                    try {
+                      const { UsageTrackingService } = await import('../services/usage-tracking');
+                      const reqUserId = (req.user as any)?.id;
+                      if (!reqUserId) return { remaining: 100, quota: 100, current: 0 };
+                      const currentUsage = await UsageTrackingService.getCurrentUsage(reqUserId);
+                      const limits = await UsageTrackingService.getUserLimits(reqUserId);
+                      return {
+                        remaining: Math.max(0, (limits.maxAiQueries || 100) - (currentUsage.aiQueries || 0)),
+                        quota: limits.maxAiQueries || 100,
+                        current: currentUsage.aiQueries || 0
+                      };
+                    } catch {
+                      return { remaining: 100, quota: 100, current: 0 };
+                    }
+                  })()
             });
         } catch (error: any) {
             console.error('Failed to process AI query', error);

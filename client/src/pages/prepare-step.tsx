@@ -227,6 +227,25 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
         }
       }
 
+      // PR-1 FIX: Hydrate additional state fields from journeyProgress
+      // Restore requirements document (avoid re-generation on refresh)
+      if (journeyProgress.requirementsDocument && !requiredDataElements) {
+        setRequiredDataElements(journeyProgress.requirementsDocument);
+        console.log('✅ [PR-1] Restored requirementsDocument from journeyProgress');
+      }
+      // Restore clarification status
+      if (journeyProgress.clarificationCompleted || journeyProgress.pmClarification) {
+        setClarificationCompleted(true);
+      }
+      // Restore industry override (distinguish from auto-detected)
+      if (journeyProgress.industryOverride) {
+        setIndustryOverride(journeyProgress.industryOverride);
+      }
+      // Restore conversation ID for PM chat resume
+      if (journeyProgress.pmConversationId && !conversationId) {
+        setConversationId(journeyProgress.pmConversationId);
+      }
+
       // Mark as hydrated with current progress version
       hasHydratedRef.current = true;
       lastHydratedProgressIdRef.current = progressId;
@@ -308,6 +327,7 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
             decisionContext
           },
           industry: effectiveIndustry, // Save detected/selected industry to journeyProgress
+          industryOverride: industryOverride || undefined, // PR-1 FIX: Persist manual override separately
           currentStep: 'prepare'
         });
       } catch (error) {
@@ -1304,6 +1324,9 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
             updateProgress({
               analysisGoal: refinedGoal || analysisGoal,
               currentStep: 'prepare',
+              // PR-1 FIX: Persist clarification status and conversation ID for resume on refresh
+              clarificationCompleted: true,
+              pmConversationId: conversationId,
               // Persist PM Agent clarification so downstream steps can use it
               pmClarification: {
                 summary: clarificationData?.summary,

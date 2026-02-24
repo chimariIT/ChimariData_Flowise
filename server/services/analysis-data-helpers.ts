@@ -124,14 +124,28 @@ export function extractDatasetRows(dataset: any, columnsToExclude?: Set<string>)
     usingRawFallback = true;
 
     // P0-7 FIX: If transformation was completed, do NOT silently fall back to raw data
+    // DT-2 FIX: Include structured diagnostics for context-aware error recovery in the frontend
     const transformationApplied = dataset?.ingestionMetadata?.transformationApplied;
     if (transformationApplied) {
       console.error(`🚨 [P0-7] Transformation was marked as applied but no transformedData found for dataset ${dataset?.id || 'unknown'}. This indicates a data persistence issue.`);
-      throw new Error(
-        `Data integrity error: Transformation step was completed for dataset "${dataset?.originalFileName || dataset?.id}" ` +
-        `but no transformed data was found. Please re-run the transformation step. ` +
-        `(Check dataset.ingestionMetadata.transformedData)`
+      const diagnosticError: any = new Error(
+        `Data integrity error: Transformation was completed for dataset "${dataset?.originalFileName || dataset?.id}" ` +
+        `but no transformed data was found. Re-run the transformation step to resolve.`
       );
+      diagnosticError.isTransformationError = true;
+      diagnosticError.diagnostics = {
+        errorType: 'TRANSFORMATION_DATA_MISSING',
+        datasetId: dataset?.id,
+        datasetName: dataset?.originalFileName,
+        transformedAt: dataset?.ingestionMetadata?.transformedAt || null,
+        hadTransformationSteps: !!(dataset?.ingestionMetadata?.transformationSteps?.length),
+        hadColumnMappings: !!(dataset?.ingestionMetadata?.columnMappings),
+        transformationApplied: true,
+        transformedDataPresent: false,
+        recoveryAction: 'RE_RUN_TRANSFORMATION',
+        recoveryStep: 'data-transformation'
+      };
+      throw diagnosticError;
     }
 
     const candidates = [

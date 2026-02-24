@@ -24,7 +24,8 @@ import { spawn } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 
-import { SocketManager } from '../socket-manager';
+// JO-3 FIX: Replaced deprecated SocketManager (Socket.IO) with native ws RealtimeServer
+import { getRealtimeServer } from '../realtime';
 
 // ============================================================================
 // Types and Interfaces
@@ -612,11 +613,15 @@ export class IntelligentDataTransformer {
       try {
         // Emit Polars start event if projectId is available in config
         if (config.projectId) {
-          SocketManager.getInstance().emitToProject(config.projectId, 'execution_progress', {
+          // JO-3 FIX: Use native ws RealtimeServer instead of deprecated SocketManager
+          getRealtimeServer()?.broadcastToProject(config.projectId, {
+            type: 'progress',
+            sourceType: 'analysis',
+            sourceId: 'polars_transform',
+            userId: '',
             projectId: config.projectId,
-            status: 'running',
-            overallProgress: 30,
-            currentStep: { id: 'polars_transform', name: 'Polars Transformation', status: 'running', description: 'Accelerating data transformation with Polars...' }
+            timestamp: new Date(),
+            data: { projectId: config.projectId, status: 'running', overallProgress: 30, currentStep: { id: 'polars_transform', name: 'Polars Transformation', status: 'running', description: 'Accelerating data transformation with Polars...' } }
           });
         }
 

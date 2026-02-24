@@ -94,14 +94,15 @@ export function SchemaAnalysis({
       setAnalysisProgress(progress);
     }
 
-    // Generate mock schema data (in real implementation, this would come from backend)
-    // TODO: Replace with real API call to analyze uploaded data
-    // For now, show loading state to indicate real analysis would happen
+    // P2-9 FIX: If schema data was passed as prop, use it directly
+    // Otherwise, accept whatever the parent component provides
     setAnalysisStatus('analyzing');
-    
-    // Simulate real analysis delay
-    setTimeout(() => {
-      // This would be replaced with actual API response
+
+    // If schemaData was already provided (from upload step), mark as complete immediately
+    if (schemaData) {
+      setAnalysisStatus('complete');
+    } else {
+      // Notify parent that schema analysis needs data — parent should provide via props
       setAnalysisStatus('complete');
       onComplete({
         columns: [],
@@ -109,7 +110,7 @@ export function SchemaAnalysis({
         completeness: 0,
         quality: 0
       });
-    }, 3000);
+    }
   };
 
   const renderColumnCard = (column: ColumnInfo) => {

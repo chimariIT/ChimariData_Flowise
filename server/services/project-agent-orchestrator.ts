@@ -6,7 +6,8 @@ import { BusinessAgent } from './business-agent';
 import { DataEngineerAgent } from './data-engineer-agent';
 import { AgentInitializationService } from './agent-initialization';
 
-import { SocketManager } from '../socket-manager';
+// JO-3 FIX: Replaced deprecated SocketManager (Socket.IO) with native ws RealtimeServer
+import { getRealtimeServer } from '../realtime';
 import { RealtimeServer } from '../realtime';
 import { storage } from './storage';
 import { journeyStateManager } from './journey-state-manager';
@@ -73,7 +74,27 @@ export class ProjectAgentOrchestrator {
     this.businessAgent = new BusinessAgent();
     this.dataEngineerAgent = new DataEngineerAgent();
     this.agentInitService = new AgentInitializationService();
-    this.executionMachine = new JourneyExecutionMachine();
+    // JO-1 FIX: Wire persistence callbacks so execution machine state survives server restarts
+    this.executionMachine = new JourneyExecutionMachine({
+      persistState: async (projectId, state) => {
+        try {
+          await storage.atomicMergeJourneyProgress(projectId, {
+            executionMachineState: state
+          });
+        } catch (error) {
+          console.error(`[Orchestrator JO-1] Failed to persist execution machine state:`, error);
+        }
+      },
+      restoreState: async (projectId) => {
+        try {
+          const project = await storage.getProject(projectId);
+          return (project as any)?.journeyProgress?.executionMachineState || null;
+        } catch (error) {
+          console.error(`[Orchestrator JO-1] Failed to restore execution machine state:`, error);
+          return null;
+        }
+      }
+    });
   }
 
   /**
@@ -957,27 +978,26 @@ export class ProjectAgentOrchestrator {
       displayMessage = this.translateCheckpointMessage(data.checkpoint, journeyType);
     }
 
-    SocketManager.getInstance().emitToProject(projectId, 'execution_progress', {
+    // JO-3 FIX: Use native ws RealtimeServer instead of deprecated SocketManager
+    getRealtimeServer()?.broadcastToProject(projectId, {
+      type: 'progress',
+      sourceType: 'streaming',
+      sourceId: `agents_${projectId}`,
+      userId,
       projectId,
-      status: 'running',
-      overallProgress: 50,
-      currentStep: {
-        id: data.checkpoint?.stepName || 'agent_activity',
-        name: data.checkpoint?.stepName || 'Agent Activity',
-        status: data.checkpoint?.status || 'in_progress',
-        description: displayMessage,
-        // Include original technical message for logging/debugging
-        technicalDescription: data.checkpoint?.message
-      },
-      // Also emit the raw agent event with translated message
-      agentEvent: {
-        type: 'progress',
-        sourceType: 'streaming',
-        sourceId: `agents_${projectId}`,
-        userId,
+      timestamp: new Date(),
+      data: {
         projectId,
-        timestamp: new Date(),
-        data: {
+        status: 'running',
+        overallProgress: 50,
+        currentStep: {
+          id: data.checkpoint?.stepName || 'agent_activity',
+          name: data.checkpoint?.stepName || 'Agent Activity',
+          status: data.checkpoint?.status || 'in_progress',
+          description: displayMessage,
+          technicalDescription: data.checkpoint?.message
+        },
+        agentEvent: {
           ...data,
           translatedMessage: displayMessage,
           journeyType,

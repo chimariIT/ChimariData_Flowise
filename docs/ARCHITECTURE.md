@@ -560,6 +560,7 @@ Platform health overview:
 | 11 | Project Inspector | `project-state-inspector.tsx` | Journey state debugging |
 | 12 | Database Optimization | `database-optimization.tsx` | DB tuning |
 | 13 | Error Tracking | `error-tracking.tsx` | Error monitoring |
+| 14 | Knowledge Management | `knowledge-management.tsx` | Knowledge base CRUD |
 
 ### Admin API (165+ Endpoints)
 
@@ -928,7 +929,7 @@ npm run test:client           # Client tests
 npm run test                  # All Playwright E2E tests
 ```
 
-### Test Organization (114 files)
+### Test Organization (148 files)
 
 | Category | Location | Framework |
 |----------|----------|-----------|
@@ -951,15 +952,15 @@ npm run test                  # All Playwright E2E tests
 ```
 chimariapp2/
 +-- client/src/
-|   +-- components/          # Reusable UI components (100+)
-|   +-- pages/               # Route-level pages (40+)
+|   +-- components/          # Reusable UI components (150+)
+|   +-- pages/               # Route-level pages (60+)
 |   |   +-- admin/           # Admin dashboard pages (14)
 |   +-- hooks/               # Custom React hooks
 |   +-- lib/                 # API client, realtime, utils
 |
 +-- server/
-|   +-- routes/              # API route handlers (67 files)
-|   +-- services/            # Business logic (168+ files)
+|   +-- routes/              # API route handlers (60 files)
+|   +-- services/            # Business logic (169 files)
 |   |   +-- agents/          # Message broker, realtime bridge
 |   |   +-- billing/         # Unified billing service
 |   |   +-- project-manager/ # PM agent modules
@@ -971,8 +972,8 @@ chimariapp2/
 |   +-- engine_utils.py      # Tri-engine dispatch (Spark/Polars/Pandas)
 |   +-- spark/               # Spark bridge (native operations)
 +-- migrations/              # Database migration files
-+-- tests/                   # 114 test files
-+-- docs/                    # Architecture docs + 148 archived sessions
++-- tests/                   # 148 test files
++-- docs/                    # Architecture docs + 340+ archived sessions
 +-- uploads/                 # Runtime uploads (originals, artifacts)
 ```
 

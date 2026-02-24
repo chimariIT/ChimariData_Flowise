@@ -613,13 +613,34 @@ export class AIAccessControlService {
     }
   }
 
+  // In-memory sliding window for rate limiting (per userId:featureId)
+  private static usageWindows: Map<string, number[]> = new Map();
+
   private static async getRecentFeatureUsage(
     userId: string,
     featureId: string,
     since: number
   ): Promise<Array<{ timestamp: number; [key: string]: any }>> {
-    // Mock implementation - in production would query actual usage data
-    return [];
+    const key = `${userId}:${featureId}`;
+    const timestamps = this.usageWindows.get(key) || [];
+    // Evict entries older than the window
+    const recent = timestamps.filter(ts => ts >= since);
+    this.usageWindows.set(key, recent);
+    return recent.map(ts => ({ timestamp: ts }));
+  }
+
+  /**
+   * Record a feature usage event for rate limiting
+   */
+  static recordUsage(userId: string, featureId: string): void {
+    const key = `${userId}:${featureId}`;
+    const timestamps = this.usageWindows.get(key) || [];
+    timestamps.push(Date.now());
+    // Keep only last 1000 entries per key to prevent unbounded growth
+    if (timestamps.length > 1000) {
+      timestamps.splice(0, timestamps.length - 1000);
+    }
+    this.usageWindows.set(key, timestamps);
   }
 
   /**
@@ -664,13 +685,30 @@ export class AIAccessControlService {
     costBreakdown: Record<string, number>;
     trends: Record<string, number>;
   }> {
-    // Mock implementation - in production would aggregate actual usage data
-    return {
-      totalUsage: 0,
-      featureBreakdown: {},
-      costBreakdown: {},
-      trends: {}
-    };
+    // P3-7 FIX: Wire to UsageTrackingService for real usage data
+    try {
+      const { UsageTrackingService } = await import('../services/usage-tracking');
+      const usage = await UsageTrackingService.getCurrentUsage(userId);
+      const totalUsage = (usage.aiQueries || 0) + (usage.dataUploads || 0) + (usage.codeGenerations || 0);
+      return {
+        totalUsage,
+        featureBreakdown: {
+          basic_analysis: usage.aiQueries || 0,
+          data_uploads: usage.dataUploads || 0,
+          code_generation: usage.codeGenerations || 0,
+          visualizations: usage.visualizationsGenerated || 0,
+        },
+        costBreakdown: {},
+        trends: {}
+      };
+    } catch {
+      return {
+        totalUsage: 0,
+        featureBreakdown: {},
+        costBreakdown: {},
+        trends: {}
+      };
+    }
   }
 
   /**

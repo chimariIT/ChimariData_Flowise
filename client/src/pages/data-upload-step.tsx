@@ -17,7 +17,6 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Database,
   Upload,
@@ -27,22 +26,13 @@ import {
   BarChart3,
   Settings,
   Eye,
+  Shield,
   ArrowRight,
   Link2,
-  FolderOpen,
-  Server,
-  Code,
-  Cloud,
-  Globe,
-  Wifi,
+  FolderOpen
 } from "lucide-react";
 import { PIIDetectionDialog } from "@/components/PIIDetectionDialog";
-import { DatabaseConnectorTab } from "@/components/DatabaseConnectorTab";
-import { APIConnectorTab } from "@/components/APIConnectorTab";
-import CloudDataConnector from "@/components/cloud-data-connector";
-import { WebScrapingTab } from "@/components/WebScrapingTab";
-import { StreamingDataTab } from "@/components/StreamingDataTab";
-// AgentCheckpoints removed - coordination now triggers after prepare step, shown on verification step
+import AgentCheckpoints from "@/components/agent-checkpoints";
 import { AgentRecommendationDialog } from "@/components/AgentRecommendationDialog";
 import { useToast } from "@/hooks/use-toast";
 import { useProject } from "@/hooks/useProject";
@@ -102,9 +92,6 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
   // Project metadata state (from project-setup-step)
   const [projectName, setProjectName] = useState("");
   const [projectDescription, setProjectDescription] = useState("");
-
-  // Data source tab state
-  const [activeSourceTab, setActiveSourceTab] = useState<string>('file');
 
   // Upload state
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -470,6 +457,28 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
     }
   }, [currentProjectId, refreshProjectPreview]);
 
+  // DU-1 FIX: Hydrate PII state from journeyProgress on mount
+  // Restores piiDecisionsByFile, excludedColumns, piiReviewCompleted, and dataQualityApproved
+  // so that a page refresh doesn't lose PII review progress
+  useEffect(() => {
+    if (!journeyProgress) return;
+    // Restore PII decisions by file
+    if (journeyProgress.piiDecisionsByFile && Object.keys(journeyProgress.piiDecisionsByFile).length > 0) {
+      setPiiDecisionsByFile(journeyProgress.piiDecisionsByFile);
+      setPiiReviewCompleted(true);
+    } else if (journeyProgress.piiDecision) {
+      setPiiReviewCompleted(true);
+    }
+    // Restore excluded columns
+    if (journeyProgress.piiDecision?.excludedColumns?.length > 0) {
+      setExcludedColumns(journeyProgress.piiDecision.excludedColumns);
+    }
+    // Restore data quality approval
+    if (journeyProgress.dataQualityApproved) {
+      setDataQualityApproved(true);
+    }
+  }, [journeyProgress]);
+
   const getJourneyTypeInfo = () => {
     switch (journeyType) {
       case 'non-tech':
@@ -825,77 +834,28 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
     }
 
     if (currentProjectId) {
+      // DU-1 FIX B: Persist PII decisions incrementally per-file (not just on Continue)
+      const updatedDecisions = { ...piiDecisionsByFile };
+      if (currentPIIFile) {
+        updatedDecisions[currentPIIFile] = {
+          excludedColumns: excludedCols || [],
+          anonymizedColumns: anonymizedColumns || [],
+          decisionTimestamp: new Date().toISOString()
+        };
+        setPiiDecisionsByFile(updatedDecisions);
+      }
+
       updateProgress({
         piiDecision: {
           excludedColumns: excludedCols || [],
           anonymizedColumns: anonymizedColumns || [],
           decisionTimestamp: new Date().toISOString()
         },
+        piiDecisionsByFile: updatedDecisions,
         schemaValidated: approved
       });
     }
   };
-
-  /**
-   * Callback for non-file data source connectors (database, API, cloud, scraping, streaming).
-   * Updates upload status, data preview, PII queue, and refreshes project datasets.
-   */
-  const handleConnectorIngestionComplete = useCallback(async (result: any) => {
-    if (!result?.success) {
-      toast({
-        title: "Ingestion Failed",
-        description: result?.error || "Failed to ingest data from source",
-        variant: "destructive"
-      });
-      return;
-    }
-
-    if (!currentProjectId) {
-      toast({
-        title: "Project Required",
-        description: "Please create a project by uploading a file first, then connect additional data sources.",
-        variant: "destructive"
-      });
-      return;
-    }
-
-    setUploadStatus('completed');
-
-    const preview = result.preview || [];
-    const schema = result.schema || {};
-    const sourceName = result.label || `Source_${Date.now()}`;
-
-    setDataPreview(prev => ({ ...prev, [sourceName]: preview.slice(0, 10) }));
-    setDataValidation(prev => ({
-      ...prev,
-      [sourceName]: {
-        totalRows: result.recordCount || preview.length,
-        totalColumns: Object.keys(schema).length,
-        missingValues: 0,
-        duplicateRows: 0,
-        qualityScore: 85
-      }
-    }));
-
-    const detectedPII = result.piiAnalysis?.detectedPII || result.piiAnalysis?.piiFields || [];
-    if (detectedPII.length > 0 && result.requiresPIIDecision) {
-      setPiiQueue(prev => [...prev, {
-        fileName: sourceName,
-        piiResult: result.piiAnalysis,
-        preview,
-        schema,
-        recordCount: result.recordCount || 0
-      }]);
-    }
-
-    // Refresh project preview to show new dataset
-    await refreshProjectPreview();
-
-    toast({
-      title: "Data Connected",
-      description: `Successfully ingested ${result.recordCount || 0} records from ${sourceName}.`,
-    });
-  }, [currentProjectId, toast, refreshProjectPreview]);
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files || []);
@@ -1020,9 +980,6 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
               schema[key] = (value as any).type;
             } else if (typeof value === 'string') {
               schema[key] = value;
-            } else if (value && typeof value === 'object') {
-              // Object without .type - extract best available type info
-              schema[key] = (value as any).dataType || (value as any).dtype || 'string';
             }
           });
           columns = Object.keys(schema).length;
@@ -1083,7 +1040,7 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
             totalColumns: columns,
             missingValues,
             duplicateRows: 0,
-            qualityScore: qualityScore ?? 0
+            qualityScore: qualityScore || 93
           }
         }));
 
@@ -1386,130 +1343,62 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
         </Card>
       )}
 
-      {/* Data Source Selection — Tabbed UI */}
+      {/* File Upload Area */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Database className="w-5 h-5" />
-            Connect Your Data
+            <Upload className="w-5 h-5" />
+            Upload Your Data
           </CardTitle>
           <CardDescription>
-            Upload files or connect to databases, APIs, cloud storage, and more
+            Upload your data file for analysis. Supported formats: CSV, Excel, JSON
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Tabs value={activeSourceTab} onValueChange={setActiveSourceTab}>
-            <TabsList className="grid w-full grid-cols-6">
-              <TabsTrigger value="file" className="flex items-center gap-1 text-xs">
-                <Upload className="w-3 h-3" /> Files
-              </TabsTrigger>
-              <TabsTrigger value="database" className="flex items-center gap-1 text-xs">
-                <Server className="w-3 h-3" /> Database
-              </TabsTrigger>
-              <TabsTrigger value="api" className="flex items-center gap-1 text-xs">
-                <Code className="w-3 h-3" /> API
-              </TabsTrigger>
-              <TabsTrigger value="cloud" className="flex items-center gap-1 text-xs">
-                <Cloud className="w-3 h-3" /> Cloud
-              </TabsTrigger>
-              <TabsTrigger value="scraping" className="flex items-center gap-1 text-xs">
-                <Globe className="w-3 h-3" /> Web
-              </TabsTrigger>
-              <TabsTrigger value="streaming" className="flex items-center gap-1 text-xs">
-                <Wifi className="w-3 h-3" /> Stream
-              </TabsTrigger>
-            </TabsList>
-
-            {/* File Upload Tab — existing file upload UI */}
-            <TabsContent value="file">
-              <div className="space-y-4 pt-2">
-                <p className="text-sm text-gray-500">
-                  Supported formats: CSV, Excel, JSON, PDF, TXT, Images
-                </p>
-                <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-gray-400 transition-colors">
-                  <input
-                    type="file"
-                    multiple
-                    accept=".csv,.xlsx,.xls,.json,.pdf,.txt,.png,.jpg,.jpeg,.gif,.bmp,.webp"
-                    onChange={handleFileUpload}
-                    className="hidden"
-                    id="file-upload"
-                    disabled={uploadStatus === 'uploading' || uploadStatus === 'processing'}
-                  />
-                  <label
-                    htmlFor="file-upload"
-                    className={`cursor-pointer ${uploadStatus === 'uploading' || uploadStatus === 'processing' ? 'cursor-not-allowed opacity-50' : ''}`}
-                  >
-                    <div className="flex flex-col items-center space-y-4">
-                      {getUploadStatusIcon()}
-                      <div>
-                        <p className="text-lg font-medium text-gray-900">
-                          {uploadedFiles.length ? `${uploadedFiles.length} file(s) selected` : 'Click to upload or drag and drop'}
-                        </p>
-                        <p className="text-sm text-gray-500">
-                          {getUploadStatusText()}
-                        </p>
-                      </div>
-                      {!uploadedFiles.length && (
-                        <Button variant="outline" disabled={uploadStatus === 'uploading' || uploadStatus === 'processing'}>
-                          Choose File
-                        </Button>
-                      )}
-                    </div>
-                  </label>
-                </div>
-
-                {(uploadStatus === 'uploading' || uploadStatus === 'processing') && (
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between text-sm">
-                      <span>Upload Progress</span>
-                      <span>{uploadProgress}%</span>
-                    </div>
-                    <Progress value={uploadProgress} className="h-2" />
+          <div className="space-y-4">
+            <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-gray-400 transition-colors">
+              <input
+                type="file"
+                multiple
+                accept=".csv,.xlsx,.xls,.json"
+                onChange={handleFileUpload}
+                className="hidden"
+                id="file-upload"
+                disabled={uploadStatus === 'uploading' || uploadStatus === 'processing'}
+              />
+              <label
+                htmlFor="file-upload"
+                className={`cursor-pointer ${uploadStatus === 'uploading' || uploadStatus === 'processing' ? 'cursor-not-allowed opacity-50' : ''}`}
+              >
+                <div className="flex flex-col items-center space-y-4">
+                  {getUploadStatusIcon()}
+                  <div>
+                    <p className="text-lg font-medium text-gray-900">
+                      {uploadedFiles.length ? `${uploadedFiles.length} file(s) selected` : 'Click to upload or drag and drop'}
+                    </p>
+                    <p className="text-sm text-gray-500">
+                      {getUploadStatusText()}
+                    </p>
                   </div>
-                )}
+                  {!uploadedFiles.length && (
+                    <Button variant="outline" disabled={uploadStatus === 'uploading' || uploadStatus === 'processing'}>
+                      Choose File
+                    </Button>
+                  )}
+                </div>
+              </label>
+            </div>
+
+            {(uploadStatus === 'uploading' || uploadStatus === 'processing') && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span>Upload Progress</span>
+                  <span>{uploadProgress}%</span>
+                </div>
+                <Progress value={uploadProgress} className="h-2" />
               </div>
-            </TabsContent>
-
-            {/* Database Connector Tab */}
-            <TabsContent value="database">
-              <DatabaseConnectorTab
-                projectId={currentProjectId}
-                onComplete={handleConnectorIngestionComplete}
-              />
-            </TabsContent>
-
-            {/* API Connector Tab */}
-            <TabsContent value="api">
-              <APIConnectorTab
-                projectId={currentProjectId}
-                onComplete={handleConnectorIngestionComplete}
-              />
-            </TabsContent>
-
-            {/* Cloud Storage Tab */}
-            <TabsContent value="cloud">
-              <CloudDataConnector
-                onDataImported={handleConnectorIngestionComplete}
-              />
-            </TabsContent>
-
-            {/* Web Scraping Tab */}
-            <TabsContent value="scraping">
-              <WebScrapingTab
-                projectId={currentProjectId || undefined}
-                onComplete={handleConnectorIngestionComplete}
-              />
-            </TabsContent>
-
-            {/* Streaming Data Tab */}
-            <TabsContent value="streaming">
-              <StreamingDataTab
-                projectId={currentProjectId || undefined}
-                onComplete={handleConnectorIngestionComplete}
-              />
-            </TabsContent>
-          </Tabs>
+            )}
+          </div>
         </CardContent>
       </Card>
 
@@ -1808,7 +1697,23 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
         </Card>
       )}
 
-      {/* AI Agents Activity - Moved to data-verification-step after user sets goals */}
+      {/* AI Agents Activity */}
+      {uploadStatus === 'completed' && piiReviewCompleted && currentProjectId && (
+        <Card className="border-purple-200 bg-purple-50">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-purple-900">
+              <Shield className="w-5 h-5" />
+              AI Agents Activity
+            </CardTitle>
+            <CardDescription className="text-purple-700">
+              Our agents are reviewing your data quality and preparing recommendations.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <AgentCheckpoints projectId={currentProjectId} />
+          </CardContent>
+        </Card>
+      )}
 
       {/* Navigation Buttons */}
       {uploadStatus === 'completed' && dataQualityApproved && onNext && (

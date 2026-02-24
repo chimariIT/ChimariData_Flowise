@@ -422,13 +422,14 @@ export class KnowledgeGraphService {
   }
 
   private async getOrCreateNode(node: InsertKnowledgeNode): Promise<KnowledgeNode> {
+    // P1-7 FIX: Case-insensitive label matching to prevent duplicates like "Healthcare" vs "healthcare"
     const [existing] = await this.database
       .select()
       .from(knowledgeNodes)
       .where(
         and(
           eq(knowledgeNodes.type, node.type),
-          eq(knowledgeNodes.label, node.label),
+          sql`lower(${knowledgeNodes.label}) = ${node.label.toLowerCase()}`,
         ),
       )
       .limit(1);
@@ -437,8 +438,11 @@ export class KnowledgeGraphService {
       return existing;
     }
 
+    // Normalize label to Title Case for consistency
+    const normalizedLabel = node.label.charAt(0).toUpperCase() + node.label.slice(1).toLowerCase();
     const payload: InsertKnowledgeNode = {
       ...node,
+      label: normalizedLabel,
       id: node.id ?? nanoid(),
     };
 
@@ -450,7 +454,7 @@ export class KnowledgeGraphService {
       .where(
         and(
           eq(knowledgeNodes.type, node.type),
-          eq(knowledgeNodes.label, node.label),
+          sql`lower(${knowledgeNodes.label}) = ${normalizedLabel.toLowerCase()}`,
         ),
       )
       .limit(1);
@@ -463,28 +467,18 @@ export class KnowledgeGraphService {
   }
 
   async ensureEdge(edge: InsertKnowledgeEdge): Promise<void> {
-    const [existing] = await this.database
-      .select()
-      .from(knowledgeEdges)
-      .where(
-        and(
-          eq(knowledgeEdges.sourceId, edge.sourceId),
-          eq(knowledgeEdges.targetId, edge.targetId),
-          eq(knowledgeEdges.relationship, edge.relationship),
-        ),
-      )
-      .limit(1);
-
-    if (existing) {
-      return;
-    }
-
+    // P1-9 FIX: Use onConflictDoNothing with the unique constraint to handle concurrent calls
     const payload: InsertKnowledgeEdge = {
       ...edge,
       id: edge.id ?? nanoid(),
     };
 
-    await this.database.insert(knowledgeEdges).values(payload);
+    await this.database
+      .insert(knowledgeEdges)
+      .values(payload)
+      .onConflictDoNothing({
+        target: [knowledgeEdges.sourceId, knowledgeEdges.targetId, knowledgeEdges.relationship],
+      });
   }
 
   // ============================================================================
@@ -504,13 +498,14 @@ export class KnowledgeGraphService {
     if (this.fallbackMode) return undefined;
     await this.ensureSeeded();
 
+    // P1-7 FIX: Case-insensitive label matching
     const [existing] = await this.database
       .select()
       .from(knowledgeNodes)
       .where(
         and(
           eq(knowledgeNodes.type, type),
-          eq(knowledgeNodes.label, label),
+          sql`lower(${knowledgeNodes.label}) = ${label.toLowerCase()}`,
         ),
       )
       .limit(1);

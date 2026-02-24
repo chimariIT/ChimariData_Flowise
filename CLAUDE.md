@@ -74,8 +74,8 @@ client/src/
   lib/                 # API client, utils, realtime
 
 server/
-  routes/              # API route handlers (64 files)
-  services/            # Business logic (150 files, PREFERRED location)
+  routes/              # API route handlers (60 files)
+  services/            # Business logic (169 files, PREFERRED location)
     agents/            # Agent message broker, realtime bridge
     billing/           # Unified billing service
     project-manager/   # PM agent modular components
@@ -86,8 +86,8 @@ shared/                # Schemas and types (Drizzle + Zod)
 migrations/            # Database migration files
 python/                # Main analysis scripts (primary)
 python_scripts/        # Additional Python utilities
-tests/                 # 114 test files (e2e, unit, integration)
-docs/                  # 13 doc files + 148+ archived session docs
+tests/                 # 148 test files (e2e, unit, integration)
+docs/                  # 17 doc files + 340+ archived session docs
 ```
 
 ---
@@ -351,4 +351,4 @@ storage.updateProject(id, { status: 'ready' } as any);
 | [FIX_PLANS.md](FIX_PLANS.md) | Fix specifications (P0-P3 priorities) |
 | [DOCKER-SETUP.md](DOCKER-SETUP.md) | Docker and Redis setup |
 | [STRIPE-INTEGRATION.md](STRIPE-INTEGRATION.md) | Payment integration details |
-| [docs/archives/](docs/archives/) | 148+ historical session docs |
+| [docs/archives/](docs/archives/) | 340+ historical session docs |

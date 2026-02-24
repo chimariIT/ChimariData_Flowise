@@ -197,9 +197,14 @@ export class UsageAlertsService {
       }
 
       case 'ai_queries': {
-        // This would typically come from a separate tracking table
-        // For now, estimate from project activity
-        return 0; // TODO: Implement AI query tracking
+        // P2-6 FIX: Fetch actual AI query usage from tracking service
+        try {
+          const { UsageTrackingService } = await import('./usage-tracking');
+          const usage = await UsageTrackingService.getCurrentUsage(userId);
+          return usage.aiQueries || 0;
+        } catch {
+          return 0;
+        }
       }
 
       default:

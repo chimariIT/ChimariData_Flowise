@@ -1,6 +1,6 @@
 # MCP Tool Implementation Status
 
-**Last Updated**: February 13, 2026 | **Registry File**: `server/services/mcp-tool-registry.ts`
+**Last Updated**: February 23, 2026 | **Registry File**: `server/services/mcp-tool-registry.ts`
 
 This document tracks the implementation status of all registered MCP tools. Generated from codebase audit.
 
@@ -89,6 +89,9 @@ This document tracks the implementation status of all registered MCP tools. Gene
 | `audience_formatter` | business_agent | Active | `AudienceFormatter` |
 | `question_answer_generator` | business_agent | Active | `QuestionAnswerService` |
 | `artifact_generator` | business_agent | Active | `ArtifactGenerator` |
+| `ba_translate_results` | business_agent, project_manager, data_scientist | Active | `BusinessAgent.translateResults()` |
+| `ba_assess_business_impact` | business_agent, project_manager | Active | `BusinessAgent.assessBusinessImpact()` |
+| `ba_generate_industry_insights` | business_agent, project_manager | Active | `BusinessAgent.generateIndustryInsights()` |
 
 ## Customer Support Tools
 | Tool | Agents | Status | Handler |
@@ -110,6 +113,7 @@ This document tracks the implementation status of all registered MCP tools. Gene
 | `academic_paper_finder` | research_agent | Active | `researchAgentToolHandlers` |
 | `trend_analyzer` | research_agent, business_agent | Active | `researchAgentToolHandlers` |
 | `content_synthesizer` | research_agent, business_agent | Active | `researchAgentToolHandlers` |
+| `knowledge_enrichment` | research_agent, project_manager | Active | `KnowledgeEnrichmentService.enrich()` |
 
 ## Business Definition Tools
 | Tool | Agents | Status | Handler |
@@ -170,11 +174,11 @@ This document tracks the implementation status of all registered MCP tools. Gene
 ---
 
 ## Summary Statistics
-- **Total Registered**: 130+
-- **Active (fully working)**: ~65 (50%)
-- **Routed (partially working)**: ~10 (8%)
-- **Stub (placeholder/unrouted)**: ~50 (38%)
-- **Planned (explicitly future)**: 6 (5%)
+- **Total Registered**: 134+
+- **Active (fully working)**: ~69 (51%)
+- **Routed (partially working)**: ~10 (7%)
+- **Stub (placeholder/unrouted)**: ~50 (37%)
+- **Planned (explicitly future)**: 6 (4%)
 
 ## Action Items
 1. Stubs that should be completed: PM coordination tools (task_coordinator, checkpoint_manager)

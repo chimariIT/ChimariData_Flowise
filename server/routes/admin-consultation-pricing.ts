@@ -14,50 +14,17 @@ import { db } from '../db';
 import { consultationPricing, users } from '@shared/schema';
 import { eq, desc } from 'drizzle-orm';
 import { ensureAuthenticated } from './auth';
+import { requireAdmin } from '../middleware/rbac';
 
 const router = Router();
 
 type ConsultationPricing = typeof consultationPricing.$inferSelect;
 
 /**
- * Middleware to ensure user is admin
- */
-async function ensureAdmin(req: any, res: any, next: any) {
-  try {
-    const userId = req.user?.id;
-    if (!userId) {
-      return res.status(401).json({ error: 'User not authenticated' });
-    }
-
-    // Fetch user with role
-    const [user] = await db
-      .select()
-      .from(users)
-      .where(eq(users.id, userId));
-
-    if (!user) {
-      return res.status(401).json({ error: 'User not found' });
-    }
-
-    // Check if user has admin role
-    if (user.role !== 'admin' && user.role !== 'super_admin') {
-      return res.status(403).json({ error: 'Admin access required' });
-    }
-
-    // Attach user to request for downstream handlers
-    req.adminUser = user;
-    next();
-  } catch (error: any) {
-    console.error('Error in ensureAdmin middleware:', error);
-    res.status(500).json({ error: 'Authorization check failed' });
-  }
-}
-
-/**
  * GET /api/admin/consultation-pricing
  * List all consultation pricing tiers
  */
-router.get('/', ensureAuthenticated, ensureAdmin, async (req, res) => {
+router.get('/', ensureAuthenticated, requireAdmin, async (req, res) => {
   try {
     const { includeInactive } = req.query;
 
@@ -87,7 +54,7 @@ router.get('/', ensureAuthenticated, ensureAdmin, async (req, res) => {
  * GET /api/admin/consultation-pricing/:id
  * Get a specific pricing tier
  */
-router.get('/:id', ensureAuthenticated, ensureAdmin, async (req, res) => {
+router.get('/:id', ensureAuthenticated, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -115,7 +82,7 @@ router.get('/:id', ensureAuthenticated, ensureAdmin, async (req, res) => {
  * POST /api/admin/consultation-pricing
  * Create a new consultation pricing tier
  */
-router.post('/', ensureAuthenticated, ensureAdmin, async (req, res) => {
+router.post('/', ensureAuthenticated, requireAdmin, async (req, res) => {
   try {
     const adminId = req.adminUser?.id;
     const {
@@ -192,7 +159,7 @@ router.post('/', ensureAuthenticated, ensureAdmin, async (req, res) => {
  * PUT /api/admin/consultation-pricing/:id
  * Update an existing consultation pricing tier
  */
-router.put('/:id', ensureAuthenticated, ensureAdmin, async (req, res) => {
+router.put('/:id', ensureAuthenticated, requireAdmin, async (req, res) => {
   try {
     const adminId = req.adminUser?.id;
     const { id } = req.params;
@@ -260,7 +227,7 @@ router.put('/:id', ensureAuthenticated, ensureAdmin, async (req, res) => {
  * DELETE /api/admin/consultation-pricing/:id
  * Deactivate a consultation pricing tier (soft delete)
  */
-router.delete('/:id', ensureAuthenticated, ensureAdmin, async (req, res) => {
+router.delete('/:id', ensureAuthenticated, requireAdmin, async (req, res) => {
   try {
     const adminId = req.adminUser?.id;
     const { id } = req.params;
@@ -301,7 +268,7 @@ router.delete('/:id', ensureAuthenticated, ensureAdmin, async (req, res) => {
  * POST /api/admin/consultation-pricing/:id/activate
  * Reactivate a deactivated pricing tier
  */
-router.post('/:id/activate', ensureAuthenticated, ensureAdmin, async (req, res) => {
+router.post('/:id/activate', ensureAuthenticated, requireAdmin, async (req, res) => {
   try {
     const adminId = req.adminUser?.id;
     const { id } = req.params;
@@ -341,7 +308,7 @@ router.post('/:id/activate', ensureAuthenticated, ensureAdmin, async (req, res) 
  * POST /api/admin/consultation-pricing/seed-defaults
  * Seed default consultation pricing tiers (for initial setup)
  */
-router.post('/seed-defaults', ensureAuthenticated, ensureAdmin, async (req, res) => {
+router.post('/seed-defaults', ensureAuthenticated, requireAdmin, async (req, res) => {
   try {
     const adminId = req.adminUser?.id;
 

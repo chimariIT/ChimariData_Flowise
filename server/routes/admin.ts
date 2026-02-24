@@ -1536,83 +1536,33 @@ router.put('/billing/tiers/:tier/pricing', async (req, res) => {
 
 /**
  * PUT /api/admin/billing/tiers/:tier/quotas
- * Update tier quotas
+ * @deprecated Use PUT /api/admin/billing/tiers/:tier/quotas in admin-billing.ts instead.
+ * This endpoint is a stub (never writes to DB). The working version is in admin-billing.ts,
+ * which is mounted first at /api/admin/billing and handles these correctly.
  */
 router.put('/billing/tiers/:tier/quotas', async (req, res) => {
-  try {
-    const tier = req.params.tier;
-    const quotas = req.body;
-
-    // Validate
-    const parseResult = SubscriptionTierEnum.safeParse(tier);
-    if (!parseResult.success) {
-      return res.status(400).json({ success: false, error: 'Invalid tier' });
-    }
-
-    // TODO: Validate quotas structure with Zod
-    // TODO: Update database
-
-    const billingService = getBillingService();
-    await billingService.reloadConfigurations();
-
-    broadcastAdminEvent('tier_quotas_updated', {
-      tier: parseResult.data,
-      quotas,
-    });
-
-    res.json({
-      success: true,
-      message: 'Quotas updated successfully',
-    });
-  } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      error: 'Failed to update quotas',
-      message: error.message,
-    });
-  }
+  console.warn('[DEPRECATED] PUT /api/admin/billing/tiers/:tier/quotas called on admin.ts stub — use admin-billing.ts endpoint instead');
+  res.status(410).json({
+    success: false,
+    error: 'This endpoint is deprecated. Use the admin-billing.ts endpoint at the same path, which is mounted with higher priority.',
+    deprecated: true,
+    migration: 'No action required — the working endpoint at /api/admin/billing/tiers/:tier/quotas (admin-billing.ts) takes precedence.'
+  });
 });
 
 /**
  * PUT /api/admin/billing/tiers/:tier/features
- * Update tier feature flags
+ * @deprecated Use PUT /api/admin/billing/tiers/:tier/features in admin-billing.ts instead.
+ * This endpoint is a stub (never writes to DB). The working version is in admin-billing.ts.
  */
 router.put('/billing/tiers/:tier/features', async (req, res) => {
-  try {
-    const tier = req.params.tier;
-    const { features } = req.body;
-
-    // Validate
-    const parseResult = SubscriptionTierEnum.safeParse(tier);
-    if (!parseResult.success) {
-      return res.status(400).json({ success: false, error: 'Invalid tier' });
-    }
-
-    if (!Array.isArray(features)) {
-      return res.status(400).json({ success: false, error: 'Features must be an array' });
-    }
-
-    // TODO: Update database
-
-    const billingService = getBillingService();
-    await billingService.reloadConfigurations();
-
-    broadcastAdminEvent('tier_features_updated', {
-      tier: parseResult.data,
-      features,
-    });
-
-    res.json({
-      success: true,
-      message: 'Features updated successfully',
-    });
-  } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      error: 'Failed to update features',
-      message: error.message,
-    });
-  }
+  console.warn('[DEPRECATED] PUT /api/admin/billing/tiers/:tier/features called on admin.ts stub — use admin-billing.ts endpoint instead');
+  res.status(410).json({
+    success: false,
+    error: 'This endpoint is deprecated. Use the admin-billing.ts endpoint at the same path, which is mounted with higher priority.',
+    deprecated: true,
+    migration: 'No action required — the working endpoint at /api/admin/billing/tiers/:tier/features (admin-billing.ts) takes precedence.'
+  });
 });
 
 // ==========================================

@@ -103,6 +103,28 @@ export class RealtimeAgentBridge extends EventEmitter {
     this.messageBroker.on('workflow:progress', async (payload: any) => {
       await this.handleWorkflowProgress(payload);
     });
+
+    // JO-2 FIX: Listen for per-analysis progress events and forward to WebSocket
+    this.messageBroker.on('analysis:progress', async (data: any) => {
+      if (!data?.projectId) return;
+      const event: RealtimeEvent = {
+        type: 'progress',
+        sourceType: 'analysis',
+        sourceId: data.analysisId || 'progress',
+        userId: data.userId || '',
+        projectId: data.projectId,
+        timestamp: new Date(),
+        data: {
+          analysisName: data.analysisName,
+          analysisType: data.analysisType,
+          status: data.status,
+          executionTimeMs: data.executionTimeMs,
+          error: data.error,
+          analysisId: data.analysisId,
+        },
+      };
+      this.realtimeServer.broadcastToProject(data.projectId, event);
+    });
   }
 
   /**

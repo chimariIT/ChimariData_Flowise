@@ -565,7 +565,21 @@ router.post('/execute', ensureAuthenticated, async (req, res) => {
           userQuestions: ((project as any)?.journeyProgress?.questions || []).map((q: any) => typeof q === 'string' ? q : q.text || ''),
           insightCount: results.insights?.length || 0,
           qualityScore: results.summary?.qualityScore || 0,
-          columnNames: (results.metadata as any)?.columnNames || [],
+          // P2-1 FIX: Source column names from journeyProgress schema/datasets, not results.metadata (which never has columnNames)
+          columnNames: (() => {
+            const jp = (project as any)?.journeyProgress;
+            // Try joined data schema first (multi-dataset)
+            const joinedSchema = jp?.joinedData?.schema;
+            if (joinedSchema && typeof joinedSchema === 'object') {
+              return Object.keys(joinedSchema);
+            }
+            // Fallback: requirements document data elements
+            const reqDoc = jp?.requirementsDocument;
+            if (reqDoc?.dataElements && Array.isArray(reqDoc.dataElements)) {
+              return reqDoc.dataElements.map((de: any) => de.sourceColumn || de.name).filter(Boolean);
+            }
+            return [];
+          })(),
           executionTimeSeconds: parseFloat(results.summary?.executionTime || '0'),
           questionAnswerMapping: results.questionAnswerMapping
         });
@@ -698,6 +712,18 @@ router.post('/execute', ensureAuthenticated, async (req, res) => {
         console.error('⚠️ Failed to refund quota:', refundError);
         // Log but continue with error response
       }
+    }
+
+    // DT-2 FIX: Detect transformation data integrity errors and return structured diagnostics
+    if (error.isTransformationError && error.diagnostics) {
+      return res.status(422).json({
+        success: false,
+        error: error.message,
+        errorType: 'TRANSFORMATION_DATA_MISSING',
+        diagnostics: error.diagnostics,
+        recoveryAction: 'RE_RUN_TRANSFORMATION',
+        quotaRefunded: quotaTracked
+      });
     }
 
     res.status(500).json({

@@ -2058,16 +2058,64 @@ export class DataEngineerToolHandlers {
   // ==========================================
 
   /**
-   * Scan PII Columns - Placeholder implementation
+   * Scan PII Columns - P1-4 FIX: Wired to real PIIMaskingService
    */
   async handleScanPIIColumns(input: any, context: ToolExecutionContext): Promise<ToolExecutionResult> {
-    return {
-      executionId: context.executionId,
-      toolId: 'scan_pii_columns',
-      status: 'success',
-      result: { message: 'PII scanning completed', piiColumns: [], confidence: 0.8 },
-      metrics: { duration: 100, resourcesUsed: { cpu: 1, memory: 10, storage: 0 }, cost: 0.001 }
-    };
+    const startTime = Date.now();
+    try {
+      const { DataMaskingService } = await import('./data-masking');
+      const { storage } = await import('./storage');
+
+      const projectId = input.projectId || context.projectId;
+      if (!projectId) {
+        return {
+          executionId: context.executionId,
+          toolId: 'scan_pii_columns',
+          status: 'error',
+          result: { error: 'projectId is required for PII scanning' },
+          metrics: { duration: Date.now() - startTime, resourcesUsed: { cpu: 0, memory: 0, storage: 0 }, cost: 0 }
+        };
+      }
+
+      const datasets = await storage.getProjectDatasets(projectId);
+      const allPiiColumns: Array<{ column: string; type: string; confidence: number; dataset: string }> = [];
+
+      for (const dataset of datasets) {
+        const data = (dataset as any).data || (dataset as any).preview || [];
+        if (!data || data.length === 0) continue;
+
+        const piiResult = DataMaskingService.detectPII(data);
+        for (const detected of piiResult.detectedFields || []) {
+          allPiiColumns.push({
+            column: detected.field,
+            type: detected.type || 'UNKNOWN',
+            confidence: detected.confidence || 0.9,
+            dataset: (dataset as any).originalFileName || (dataset as any).id
+          });
+        }
+      }
+
+      return {
+        executionId: context.executionId,
+        toolId: 'scan_pii_columns',
+        status: 'success',
+        result: {
+          message: `PII scanning completed. Found ${allPiiColumns.length} PII column(s) across ${datasets.length} dataset(s).`,
+          piiColumns: allPiiColumns,
+          confidence: allPiiColumns.length > 0 ? 0.9 : 1.0,
+          datasetsScanned: datasets.length
+        },
+        metrics: { duration: Date.now() - startTime, resourcesUsed: { cpu: 2, memory: 50, storage: 0 }, cost: 0.002 }
+      };
+    } catch (error: any) {
+      return {
+        executionId: context.executionId,
+        toolId: 'scan_pii_columns',
+        status: 'error',
+        result: { error: `PII scan failed: ${error.message}`, piiColumns: [] },
+        metrics: { duration: Date.now() - startTime, resourcesUsed: { cpu: 1, memory: 10, storage: 0 }, cost: 0.001 }
+      };
+    }
   }
 
   /**

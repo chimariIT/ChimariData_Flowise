@@ -15,6 +15,7 @@ import { db } from '../db';
 import { servicePricing } from '@shared/schema';
 import { eq } from 'drizzle-orm';
 import { ensureAuthenticated } from './auth';
+import { requireAdmin } from '../middleware/rbac';
 import { getStripeSyncService } from '../services/stripe-sync';
 import { PricingService } from '../services/pricing';
 
@@ -23,41 +24,10 @@ type ServicePricing = typeof servicePricing.$inferSelect;
 const router = Router();
 
 /**
- * Middleware to ensure user is admin
- */
-async function ensureAdmin(req: any, res: any, next: any) {
-  try {
-    const userId = req.user?.id;
-    if (!userId) {
-      return res.status(401).json({ error: 'User not authenticated' });
-    }
-
-    // Fetch user with role
-    const { users } = await import('@shared/schema');
-    const [user] = await db.select().from(users).where(eq(users.id, userId));
-
-    if (!user) {
-      return res.status(401).json({ error: 'User not found' });
-    }
-
-    // Check if user has admin role
-    if (user.role !== 'admin' && user.role !== 'super_admin') {
-      return res.status(403).json({ error: 'Admin access required' });
-    }
-
-    req.adminUser = user;
-    next();
-  } catch (error: any) {
-    console.error('Error in ensureAdmin middleware:', error);
-    res.status(500).json({ error: 'Authorization check failed' });
-  }
-}
-
-/**
  * GET /api/admin/service-pricing
  * List all service pricing tiers
  */
-router.get('/', ensureAuthenticated, ensureAdmin, async (req: Request, res: Response) => {
+router.get('/', ensureAuthenticated, requireAdmin, async (req: Request, res: Response) => {
   try {
     const { includeInactive } = req.query;
 
@@ -83,7 +53,7 @@ router.get('/', ensureAuthenticated, ensureAdmin, async (req: Request, res: Resp
  * GET /api/admin/service-pricing/:id
  * Get a specific service pricing tier
  */
-router.get('/:id', ensureAuthenticated, ensureAdmin, async (req: Request, res: Response) => {
+router.get('/:id', ensureAuthenticated, requireAdmin, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
 
@@ -110,7 +80,7 @@ router.get('/:id', ensureAuthenticated, ensureAdmin, async (req: Request, res: R
  * POST /api/admin/service-pricing
  * Create a new service pricing tier
  */
-router.post('/', ensureAuthenticated, ensureAdmin, async (req: Request, res: Response) => {
+router.post('/', ensureAuthenticated, requireAdmin, async (req: Request, res: Response) => {
   try {
     const {
       serviceType,
@@ -183,7 +153,7 @@ router.post('/', ensureAuthenticated, ensureAdmin, async (req: Request, res: Res
  * PUT /api/admin/service-pricing/:id
  * Update an existing service pricing tier
  */
-router.put('/:id', ensureAuthenticated, ensureAdmin, async (req: Request, res: Response) => {
+router.put('/:id', ensureAuthenticated, requireAdmin, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const {
@@ -251,7 +221,7 @@ router.put('/:id', ensureAuthenticated, ensureAdmin, async (req: Request, res: R
  * DELETE /api/admin/service-pricing/:id
  * Deactivate a service pricing tier (soft delete)
  */
-router.delete('/:id', ensureAuthenticated, ensureAdmin, async (req: Request, res: Response) => {
+router.delete('/:id', ensureAuthenticated, requireAdmin, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
 
@@ -289,7 +259,7 @@ router.delete('/:id', ensureAuthenticated, ensureAdmin, async (req: Request, res
  * POST /api/admin/service-pricing/:id/sync-stripe
  * Sync service pricing with Stripe
  */
-router.post('/:id/sync-stripe', ensureAuthenticated, ensureAdmin, async (req: Request, res: Response) => {
+router.post('/:id/sync-stripe', ensureAuthenticated, requireAdmin, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const stripeSyncService = getStripeSyncService();

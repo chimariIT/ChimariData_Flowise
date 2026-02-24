@@ -4,6 +4,7 @@ import type _express from 'express';
 const express: typeof _express = (expressModule as any).default || expressModule;
 import type { Request, Response, NextFunction } from 'express';
 import { toolAnalyticsService } from '../services/tool-analytics';
+import { requireAdmin } from '../middleware/rbac';
 
 const router = express.Router();
 
@@ -17,26 +18,11 @@ const router = express.Router();
  * - Performance alerts
  */
 
-// Middleware to check authentication
+// Middleware to check authentication (route-level auth applied at mount in index.ts)
 const requireAuth = (req: Request, res: Response, next: NextFunction) => {
   if (!req.user) {
     return res.status(401).json({ error: 'Authentication required' });
   }
-  next();
-};
-
-// Middleware to check admin access
-const requireAdmin = (req: Request, res: Response, next: NextFunction) => {
-  if (!req.user) {
-    return res.status(401).json({ error: 'Authentication required' });
-  }
-
-  // Check if user is admin (email-based check - should be replaced with role-based)
-  const userEmail = (req.user as any).email || '';
-  if (!userEmail.includes('@admin.com') && (req.user as any).role !== 'admin') {
-    return res.status(403).json({ error: 'Admin access required' });
-  }
-
   next();
 };
 

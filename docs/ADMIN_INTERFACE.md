@@ -1,12 +1,12 @@
 # Admin Interface - Complete Admin Panel
 
-**Last Updated**: February 13, 2026
+**Last Updated**: February 23, 2026
 
 ## Overview
 
-Complete UI-based admin interface for managing all aspects of the ChimariData platform. The admin panel provides 11 UI pages across 10 tabs, backed by 165+ API endpoints across 6 route files. Features include agent/tool management, billing configuration, campaign management, consultation workflow, project debugging, and system monitoring — all with real-time WebSocket updates.
+Complete UI-based admin interface for managing all aspects of the ChimariData platform. The admin panel provides 15 UI files across 14 tabs, backed by 165+ API endpoints across 6 route files. Features include agent/tool management, billing configuration, campaign management, consultation workflow, error tracking, database management, knowledge graph management, project debugging, and system monitoring — all with real-time WebSocket updates.
 
-> **Audit Note (Feb 2026):** This document previously covered only agent and tool management (2 pages). Updated to document all 11 admin UI pages, 10 tab values, and the full admin routing system.
+> **Audit Note (Feb 2026):** This document previously covered only agent and tool management (2 pages). Updated to document all 15 admin UI files, 14 tab values, and the full admin routing system.
 
 ## Admin Pages Overview
 
@@ -14,22 +14,26 @@ Complete UI-based admin interface for managing all aspects of the ChimariData pl
 **Entry point**: `index.tsx` (admin layout with tab routing)
 **Routing**: `/admin/:tab` — URL path segment maps to tab value
 
-### All Admin Pages (11 files, 10 tabs)
+### All Admin Pages (15 files, 14 tabs)
 
 | # | Tab Value | Component File | Description |
 |---|-----------|---------------|-------------|
 | 1 | `dashboard` | `admin-dashboard.tsx` | Platform health, revenue metrics, system status |
-| 2 | `subscription-management` | `subscription-management.tsx` | User subscription CRUD, tier management |
-| 3 | `service-pricing` | `pricing-services.tsx` | Service pricing configuration |
-| 4 | `analysis-pricing` | `analysis-pricing.tsx` | Per-analysis-type pricing, multipliers, complexity |
-| 5 | `campaigns` | `campaign-management.tsx` | Campaign/coupon CRUD, usage tracking |
-| 6 | `consultations` | `consultations.tsx` | Consultation request queue and assignment |
-| 7 | `consultation-pricing` | `consultation-pricing.tsx` | Consultation pricing tiers |
-| 8 | `agent-management` | `agent-management.tsx` | Agent monitoring, creation, templates |
-| 9 | `tools-management` | `tools-management.tsx` | Tool registry, permissions, metrics |
-| 10 | `state-inspector` | `project-state-inspector.tsx` | Project state debugging tool |
+| 2 | `user-management` | `user-management.tsx` | User account management and administration |
+| 3 | `subscription-management` | `subscription-management.tsx` | User subscription CRUD, tier management |
+| 4 | `service-pricing` | `pricing-services.tsx` | Service pricing configuration |
+| 5 | `analysis-pricing` | `analysis-pricing.tsx` | Per-analysis-type pricing, multipliers, complexity |
+| 6 | `campaigns` | `campaign-management.tsx` | Campaign/coupon CRUD, usage tracking |
+| 7 | `consultations` | `consultations.tsx` | Consultation request queue and assignment |
+| 8 | `consultation-pricing` | `consultation-pricing.tsx` | Consultation pricing tiers |
+| 9 | `agent-management` | `agent-management.tsx` | Agent monitoring, creation, templates |
+| 10 | `tools-management` | `tools-management.tsx` | MCP tool registry, permissions, agent access, metrics |
+| 11 | `error-tracking` | `error-tracking.tsx` | Circuit breakers, error statistics, failure monitoring |
+| 12 | `database` | `database-optimization.tsx` | Database health, optimization, and maintenance |
+| 13 | `state-inspector` | `project-state-inspector.tsx` | Project state debugging tool |
+| 14 | `knowledge` | `knowledge-management.tsx` | Knowledge graph nodes, edges, patterns, enrichment review |
 
-**Note**: `index.tsx` is the layout shell (11th file), not a tab itself.
+**Note**: `index.tsx` is the layout shell (15th file), not a tab itself.
 
 ### Backend Route Files (6 files, 165+ endpoints)
 
@@ -636,13 +640,13 @@ The platform includes 8 pre-configured agent templates for common business use c
 **Via API:**
 ```bash
 # 1. Browse available templates
-curl http://localhost:3000/api/admin/templates
+curl http://localhost:5000/api/admin/templates
 
 # 2. Get recommendations for your use case
-curl http://localhost:3000/api/admin/templates/recommendations?useCase=fraud%20detection
+curl http://localhost:5000/api/admin/templates/recommendations?useCase=fraud%20detection
 
 # 3. Create agent from template
-curl -X POST http://localhost:3000/api/admin/templates/customer_churn_predictor/create \
+curl -X POST http://localhost:5000/api/admin/templates/customer_churn_predictor/create \
   -H "Content-Type: application/json" \
   -d '{
     "name": "My Churn Predictor",
@@ -745,8 +749,8 @@ The agent management dashboard shows:
 
 1. **Start Server**: `npm run dev`
 2. **Open Admin Pages**:
-   - Agent Management: `http://localhost:3000/admin/agent-management`
-   - Tools Management: `http://localhost:3000/admin/tools-management`
+   - Agent Management: `http://localhost:5000/admin/agent-management`
+   - Tools Management: `http://localhost:5000/admin/tools-management`
 3. **Test Agent Creation**:
    - Create new agent via UI
    - Verify it appears in the list
@@ -764,10 +768,10 @@ The agent management dashboard shows:
 
 ```bash
 # Get all agents
-curl http://localhost:3000/api/admin/agents
+curl http://localhost:5000/api/admin/agents
 
 # Create new agent
-curl -X POST http://localhost:3000/api/admin/agents \
+curl -X POST http://localhost:5000/api/admin/agents \
   -H "Content-Type: application/json" \
   -d '{
     "id": "test_agent",
@@ -779,13 +783,13 @@ curl -X POST http://localhost:3000/api/admin/agents \
   }'
 
 # Delete agent
-curl -X DELETE http://localhost:3000/api/admin/agents/test_agent
+curl -X DELETE http://localhost:5000/api/admin/agents/test_agent
 
 # Get all tools
-curl http://localhost:3000/api/admin/tools
+curl http://localhost:5000/api/admin/tools
 
 # Create new tool
-curl -X POST http://localhost:3000/api/admin/tools \
+curl -X POST http://localhost:5000/api/admin/tools \
   -H "Content-Type: application/json" \
   -d '{
     "name": "test_tool",
@@ -796,25 +800,25 @@ curl -X POST http://localhost:3000/api/admin/tools \
   }'
 
 # Delete tool
-curl -X DELETE http://localhost:3000/api/admin/tools/test_tool
+curl -X DELETE http://localhost:5000/api/admin/tools/test_tool
 
 # Get all agent templates
-curl http://localhost:3000/api/admin/templates
+curl http://localhost:5000/api/admin/templates
 
 # Filter templates by category
-curl http://localhost:3000/api/admin/templates?category=ml
+curl http://localhost:5000/api/admin/templates?category=ml
 
 # Search templates
-curl http://localhost:3000/api/admin/templates?search=fraud
+curl http://localhost:5000/api/admin/templates?search=fraud
 
 # Get specific template
-curl http://localhost:3000/api/admin/templates/customer_churn_predictor
+curl http://localhost:5000/api/admin/templates/customer_churn_predictor
 
 # Get template recommendations
-curl http://localhost:3000/api/admin/templates/recommendations?useCase=churn
+curl http://localhost:5000/api/admin/templates/recommendations?useCase=churn
 
 # Create agent from template
-curl -X POST http://localhost:3000/api/admin/templates/sales_forecaster/create \
+curl -X POST http://localhost:5000/api/admin/templates/sales_forecaster/create \
   -H "Content-Type: application/json" \
   -d '{
     "name": "My Sales Forecaster",
@@ -827,7 +831,7 @@ curl -X POST http://localhost:3000/api/admin/templates/sales_forecaster/create \
 ### WebSocket Not Connecting
 
 1. Check if server is running on correct port
-2. Verify WebSocket URL in client (ws://localhost:3000/ws)
+2. Verify WebSocket URL in client (ws://localhost:5000/ws)
 3. Check browser console for connection errors
 4. Ensure RealtimeServer is initialized in server/index.ts
 

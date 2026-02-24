@@ -39,9 +39,10 @@ export default function ErrorTracking() {
 
   // Fetch circuit breaker status
   const { data: circuitBreakers, isLoading: cbLoading } = useQuery({
-    queryKey: ["/api/admin/circuit-breakers/status"],
+    queryKey: ["/api/admin/errors/circuit-breakers"],
     queryFn: async () => {
-      const response = await apiClient.get("/api/admin/circuit-breakers/status");
+      // P1-1 FIX: Corrected API path to match migrated endpoint
+      const response = await apiClient.get("/api/admin/errors/circuit-breakers");
       return response?.data || response;
     },
     staleTime: 10000,
@@ -54,11 +55,12 @@ export default function ErrorTracking() {
       if (name) {
         return apiClient.post(`/api/admin/errors/circuit-breakers/${name}/reset`);
       }
-      return apiClient.post("/api/admin/circuit-breakers/reset");
+      // P1-1 FIX: Use the correct generic reset endpoint or individual reset
+      return apiClient.post("/api/admin/errors/circuit-breakers/all/reset");
     },
     onSuccess: () => {
       toast({ title: "Circuit Breaker Reset", description: "Circuit breaker has been reset to closed state." });
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/circuit-breakers/status"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/errors/circuit-breakers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/errors/statistics"] });
     },
     onError: (err: any) => {

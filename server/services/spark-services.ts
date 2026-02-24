@@ -11,7 +11,8 @@
  */
 
 import { PythonProcessor } from './python-processor';
-import { SocketManager } from '../socket-manager';
+// JO-3 FIX: Replaced deprecated SocketManager (Socket.IO) with native ws RealtimeServer
+import { getRealtimeServer } from '../realtime';
 import { ToolExecutionContext, ToolExecutionResult } from './real-tool-handlers';
 
 export interface SparkJobConfig {
@@ -84,11 +85,15 @@ export class SparkVisualizationEngine {
       if (shouldUseSpark) {
         // Emit Spark start event
         if (config.projectId) {
-          SocketManager.getInstance().emitToProject(config.projectId, 'execution_progress', {
+          // JO-3 FIX: Use native ws RealtimeServer instead of deprecated SocketManager
+          getRealtimeServer()?.broadcastToProject(config.projectId, {
+            type: 'progress',
+            sourceType: 'analysis',
+            sourceId: 'spark_viz',
+            userId: '',
             projectId: config.projectId,
-            status: 'running',
-            overallProgress: 20,
-            currentStep: { id: 'spark_viz', name: 'Spark Visualization', status: 'running', description: `Initializing Spark cluster (${selection.reason})...` }
+            timestamp: new Date(),
+            data: { projectId: config.projectId, status: 'running', overallProgress: 20, currentStep: { id: 'spark_viz', name: 'Spark Visualization', status: 'running', description: `Initializing Spark cluster (${selection.reason})...` } }
           });
         }
       }

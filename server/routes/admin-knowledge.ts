@@ -418,6 +418,52 @@ router.get('/edges', ensureAuthenticated, ensureAdmin, async (req: Request, res:
   }
 });
 
+// P2-3 FIX: Create edge endpoint
+router.post('/edges', ensureAuthenticated, ensureAdmin, async (req: Request, res: Response) => {
+  try {
+    const { sourceId, targetId, relationship, weight, attributes } = req.body;
+
+    if (!sourceId || !targetId || !relationship) {
+      return res.status(400).json({ success: false, error: 'sourceId, targetId, and relationship are required' });
+    }
+
+    // Verify source and target nodes exist
+    const [sourceNode] = await db.select().from(knowledgeNodes).where(eq(knowledgeNodes.id, sourceId)).limit(1);
+    const [targetNode] = await db.select().from(knowledgeNodes).where(eq(knowledgeNodes.id, targetId)).limit(1);
+
+    if (!sourceNode) return res.status(404).json({ success: false, error: `Source node "${sourceId}" not found` });
+    if (!targetNode) return res.status(404).json({ success: false, error: `Target node "${targetId}" not found` });
+
+    let parsedAttributes = attributes || {};
+    if (typeof parsedAttributes === 'string') {
+      try { parsedAttributes = JSON.parse(parsedAttributes); } catch { return res.status(400).json({ success: false, error: 'Invalid JSON in attributes' }); }
+    }
+
+    const edgeId = nanoid();
+    await db.insert(knowledgeEdges).values({
+      id: edgeId,
+      sourceId,
+      targetId,
+      relationship,
+      weight: weight ?? 1,
+      attributes: parsedAttributes,
+    }).onConflictDoNothing({
+      target: [knowledgeEdges.sourceId, knowledgeEdges.targetId, knowledgeEdges.relationship],
+    });
+
+    const [created] = await db.select().from(knowledgeEdges).where(eq(knowledgeEdges.id, edgeId)).limit(1);
+
+    res.status(201).json({
+      success: true,
+      message: `Edge ${sourceNode.label} -[${relationship}]-> ${targetNode.label} created`,
+      data: created || { id: edgeId, sourceId, targetId, relationship, weight: weight ?? 1 },
+    });
+  } catch (error: any) {
+    console.error('Error creating knowledge edge:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // Update edge
 router.put('/edges/:id', ensureAuthenticated, ensureAdmin, async (req: Request, res: Response) => {
   try {

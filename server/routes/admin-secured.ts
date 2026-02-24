@@ -20,6 +20,11 @@ import { db, getPoolStats } from '../db';
 import { users, projects, datasets } from '../../shared/schema';
 import { PricingService } from '../services/pricing';
 import { sql, count } from 'drizzle-orm';
+// P1-1 FIX: Imports for migrated endpoints (tools, database, errors)
+import { MCPToolRegistry } from '../services/mcp-tool-registry';
+import { EnhancedMCPService } from '../enhanced-mcp-service';
+import { enhancedPool } from '../enhanced-db';
+import { errorHandler } from '../services/enhanced-error-handler';
 
 const router = express.Router();
 
@@ -1083,6 +1088,244 @@ router.post('/billing/analysis-pricing/reset', requirePermission('billing', 'man
       success: false,
       error: error.message || 'Failed to reset analysis pricing'
     });
+  }
+});
+
+// ============================================================================
+// P1-1 FIX: MIGRATED TOOLS ENDPOINTS (from admin.ts → admin-secured.ts)
+// These were at /api/admin-legacy/tools, now served at /api/admin/tools
+// ============================================================================
+
+/**
+ * GET /api/admin/tools
+ * Get all registered tools
+ */
+router.get('/tools', requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const tools = MCPToolRegistry.getAllTools();
+    const mcpResources = EnhancedMCPService.getAllResources();
+
+    const toolData = tools.map(tool => ({
+      id: tool.name,
+      name: tool.name,
+      description: tool.description,
+      category: tool.category || 'utility',
+      version: '1.0.0',
+      author: 'System',
+      status: 'active',
+      tags: [],
+      permissions: {
+        required: tool.permissions,
+        optional: []
+      },
+      agentAccess: tool.agentAccess || ['all'],
+      inputSchema: tool.inputSchema,
+      outputSchema: tool.outputSchema,
+      examples: tool.examples || [],
+      metrics: {
+        totalExecutions: 0,
+        successfulExecutions: 0,
+        failedExecutions: 0,
+        averageExecutionTime: 0,
+        uptime: 100,
+        errorRate: 0,
+        userSatisfactionScore: 4.8
+      }
+    }));
+
+    res.json({
+      success: true,
+      tools: toolData,
+      totalTools: toolData.length,
+      mcpResources: mcpResources.length
+    });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: 'Failed to fetch tools', message: error.message });
+  }
+});
+
+router.get('/tools/catalog', requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const catalog = MCPToolRegistry.generateCatalog();
+    res.json({ success: true, catalog });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: 'Failed to generate catalog', message: error.message });
+  }
+});
+
+router.get('/tools/by-category/:category', requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const { category } = req.params;
+    const tools = MCPToolRegistry.getToolsByCategory(category);
+    res.json({ success: true, category, tools, count: tools.length });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: 'Failed to fetch tools by category', message: error.message });
+  }
+});
+
+router.get('/tools/for-agent/:agentId', requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const { agentId } = req.params;
+    const tools = MCPToolRegistry.getToolsForAgent(agentId);
+    res.json({ success: true, agentId, tools, count: tools.length });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: 'Failed to fetch agent tools', message: error.message });
+  }
+});
+
+router.get('/tools/:toolName', requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const { toolName } = req.params;
+    const tool = MCPToolRegistry.getTool(toolName);
+    if (!tool) {
+      return res.status(404).json({ success: false, error: 'Tool not found' });
+    }
+    const documentation = MCPToolRegistry.getToolDocs(toolName);
+    res.json({ success: true, tool, documentation });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: 'Failed to fetch tool details', message: error.message });
+  }
+});
+
+router.post('/tools', requireSuperAdmin, async (req: Request, res: Response) => {
+  try {
+    const toolDefinition = req.body;
+    if (!toolDefinition.name || !toolDefinition.description || !toolDefinition.permissions) {
+      return res.status(400).json({ success: false, error: 'Missing required fields: name, description, permissions' });
+    }
+    if (!toolDefinition.service) { toolDefinition.service = 'DynamicToolService'; }
+    MCPToolRegistry.registerTool(toolDefinition);
+    res.json({ success: true, message: `Tool ${toolDefinition.name} registered successfully`, tool: MCPToolRegistry.getTool(toolDefinition.name) });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: 'Failed to register tool', message: error.message });
+  }
+});
+
+router.delete('/tools/:toolName', requireSuperAdmin, async (req: Request, res: Response) => {
+  try {
+    const { toolName } = req.params;
+    const success = MCPToolRegistry.unregisterTool(toolName);
+    if (!success) { return res.status(404).json({ success: false, error: 'Tool not found' }); }
+    res.json({ success: true, message: `Tool ${toolName} unregistered successfully` });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: 'Failed to unregister tool', message: error.message });
+  }
+});
+
+// ============================================================================
+// P1-1 FIX: MIGRATED DATABASE ENDPOINTS (from admin.ts → admin-secured.ts)
+// ============================================================================
+
+router.get('/database/status', requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const poolStats = getPoolStats();
+    if (!poolStats) {
+      return res.status(503).json({ success: false, error: 'Database not available', message: 'Database connection pool is not initialized' });
+    }
+    res.json({ success: true, data: { timestamp: new Date().toISOString(), poolStats, status: 'connected', environment: process.env.NODE_ENV || 'development' } });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: 'Failed to fetch database status', message: error.message });
+  }
+});
+
+router.get('/database/health', requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const poolStats = getPoolStats();
+    if (!poolStats) {
+      return res.status(503).json({ success: false, healthy: false, error: 'Database not available' });
+    }
+    const isHealthy = poolStats.totalCount > 0 && poolStats.waitingCount < 10;
+    const status = isHealthy ? 'healthy' : 'degraded';
+    res.status(isHealthy ? 200 : 503).json({
+      success: isHealthy, healthy: isHealthy, status,
+      timestamp: new Date().toISOString(),
+      details: {
+        totalConnections: poolStats.totalCount,
+        idleConnections: poolStats.idleCount,
+        waitingClients: poolStats.waitingCount,
+        poolUtilization: poolStats.totalCount > 0 ? Math.round(((poolStats.totalCount - poolStats.idleCount) / poolStats.totalCount) * 100) : 0
+      }
+    });
+  } catch (error: any) {
+    res.status(500).json({ success: false, healthy: false, error: 'Failed to check database health', message: error.message });
+  }
+});
+
+router.get('/database/optimization/health', requireSuperAdmin, async (req: Request, res: Response) => {
+  try {
+    const healthCheck = await enhancedPool.performDatabaseHealthCheck();
+    res.json({ success: true, data: healthCheck });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: 'Failed to perform database health check', message: error.message });
+  }
+});
+
+router.get('/database/optimization/metrics', requireSuperAdmin, async (req: Request, res: Response) => {
+  try {
+    const metrics = enhancedPool.getQueryMetrics();
+    res.json({ success: true, data: { totalQueries: metrics.length, metrics: metrics.slice(0, 50) } });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: 'Failed to get query metrics', message: error.message });
+  }
+});
+
+router.get('/database/optimization/slow-queries', requireSuperAdmin, async (req: Request, res: Response) => {
+  try {
+    const limit = parseInt(req.query.limit as string) || 25;
+    const slowQueries = enhancedPool.getSlowQueries(limit);
+    res.json({ success: true, data: { count: slowQueries.length, queries: slowQueries } });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: 'Failed to get slow queries', message: error.message });
+  }
+});
+
+router.post('/database/optimization/migration', requireSuperAdmin, async (req: Request, res: Response) => {
+  try {
+    const { migration } = req.body;
+    if (!migration || !migration.name || !migration.up) {
+      return res.status(400).json({ success: false, error: 'Invalid migration data', message: 'Migration must have name and up fields' });
+    }
+    await enhancedPool.executeMigration(migration);
+    res.json({ success: true, message: `Migration "${migration.name}" executed successfully` });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: 'Failed to execute migration', message: error.message });
+  }
+});
+
+// ============================================================================
+// P1-1 FIX: MIGRATED ERROR TRACKING ENDPOINTS (from admin.ts → admin-secured.ts)
+// ============================================================================
+
+router.get('/errors/statistics', requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const timeWindow = req.query.timeWindow ? parseInt(req.query.timeWindow as string) : undefined;
+    const statistics = errorHandler.getErrorStatistics(timeWindow);
+    res.json({ success: true, data: statistics });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: 'Failed to get error statistics', message: error.message });
+  }
+});
+
+router.get('/errors/circuit-breakers', requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const circuitBreakers = errorHandler.getCircuitBreakerStatus();
+    res.json({ success: true, data: { count: circuitBreakers.length, circuitBreakers } });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: 'Failed to get circuit breaker status', message: error.message });
+  }
+});
+
+router.post('/errors/circuit-breakers/:name/reset', requireSuperAdmin, async (req: Request, res: Response) => {
+  try {
+    const { name } = req.params;
+    const success = errorHandler.resetCircuitBreaker(name);
+    if (success) {
+      res.json({ success: true, message: `Circuit breaker "${name}" reset successfully` });
+    } else {
+      res.status(404).json({ success: false, error: 'Circuit breaker not found', message: `No circuit breaker found with name "${name}"` });
+    }
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: 'Failed to reset circuit breaker', message: error.message });
   }
 });
 

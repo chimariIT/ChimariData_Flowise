@@ -536,13 +536,28 @@ export class AIOptimizationService {
     return ['gemini-2.5-flash-lite', 'gpt-4o-mini'];
   }
 
+  // P2-8 FIX: In-memory cache for development, Redis for production
+  private static memoryCache: Map<string, { value: any; expiresAt: number }> = new Map();
+
   private static async getCacheValue(key: string): Promise<any> {
-    // Mock implementation
-    return null;
+    const entry = this.memoryCache.get(key);
+    if (!entry) return null;
+    if (Date.now() > entry.expiresAt) {
+      this.memoryCache.delete(key);
+      return null;
+    }
+    return entry.value;
   }
 
   private static async setCacheValue(key: string, value: any, ttl: number): Promise<void> {
-    // Mock implementation
+    this.memoryCache.set(key, { value, expiresAt: Date.now() + ttl * 1000 });
+    // Evict stale entries if cache grows too large
+    if (this.memoryCache.size > 500) {
+      const now = Date.now();
+      for (const [k, v] of this.memoryCache) {
+        if (now > v.expiresAt) this.memoryCache.delete(k);
+      }
+    }
   }
 
   private static isCacheValid(timestamp: number, ttl: number): boolean {
@@ -550,15 +565,32 @@ export class AIOptimizationService {
   }
 
   private static async trackCacheHit(userRole: UserRole, requestType: string): Promise<void> {
-    // Mock implementation
+    // Log cache hit for monitoring (non-blocking)
+    console.debug(`[AI-Optimization] Cache hit: role=${userRole}, type=${requestType}`);
   }
 
   private static findPeakUsageHours(history: any[]): number[] {
-    return [9, 14, 16]; // Mock peak hours
+    if (!history || history.length === 0) return [9, 14, 16];
+    // Compute peak hours from actual history timestamps
+    const hourCounts: Record<number, number> = {};
+    for (const item of history) {
+      const hour = new Date(item.timestamp || item.createdAt).getHours();
+      hourCounts[hour] = (hourCounts[hour] || 0) + 1;
+    }
+    return Object.entries(hourCounts)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 3)
+      .map(([h]) => parseInt(h));
   }
 
   private static analyzeRequestTypes(history: any[]): any {
-    return {}; // Mock implementation
+    if (!history || history.length === 0) return {};
+    const counts: Record<string, number> = {};
+    for (const item of history) {
+      const type = item.requestType || item.type || 'unknown';
+      counts[type] = (counts[type] || 0) + 1;
+    }
+    return counts;
   }
 
   private static analyzeComplexityDistribution(history: any[]): any {

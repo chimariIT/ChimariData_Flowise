@@ -184,32 +184,15 @@ export function MultiSourceUpload({
           requiresAuth: true
         });
       } else {
-        // For demo purposes, simulate successful upload with mock data
-        console.warn('Upload endpoint failed, using mock data for demo:', error);
-        const mockUploadResult = {
-          success: true,
-          project: {
-            id: `demo-project-${Date.now()}`,
-            name: file.name.replace(/\.[^/.]+$/, ""),
-            description: `Demo project for ${file.name}`,
-            createdAt: new Date().toISOString(),
-            schema: {
-              columns: ['id', 'name', 'value', 'category', 'date'],
-              types: ['string', 'string', 'number', 'string', 'date']
-            },
-            processed: false
-          },
-          schema: {
-            columns: ['id', 'name', 'value', 'category', 'date'],
-            types: ['string', 'string', 'number', 'string', 'date']
-          },
-          recordCount: 1000,
-          filename: file.name,
-          size: file.size,
-          mimeType: file.type
-        };
-        
-        onComplete(mockUploadResult);
+        // P0-1 FIX: Do NOT fabricate a mock project on upload failure.
+        // Surface the real error so the user can retry.
+        const errorMsg = error.message || 'Upload failed. Please check your connection and try again.';
+        console.error('Upload failed:', errorMsg);
+        onComplete({
+          error: errorMsg,
+          errorType: 'UPLOAD_FAILED',
+          requiresAuth: false
+        });
       }
     }
   }, [onComplete, selectedSource, serviceType, questions]);

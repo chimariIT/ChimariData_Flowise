@@ -547,6 +547,19 @@ function EnrichmentSection() {
         )
       )}
 
+      {/* P2-2 FIX: Pagination controls for enrichment section */}
+      <div className="flex items-center justify-between mt-3">
+        <span className="text-xs text-muted-foreground">
+          Page {page} {view === "pending" ? `of ${Math.ceil((pendingData?.total || 0) / 25) || 1}` : ""}
+        </span>
+        <div className="flex gap-1">
+          <Button size="sm" variant="outline" className="h-7 text-xs" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>Prev</Button>
+          <Button size="sm" variant="outline" className="h-7 text-xs"
+            disabled={view === "pending" ? (pendingData?.nodes || []).length < 25 : (historyData?.history || []).length < 25}
+            onClick={() => setPage(p => p + 1)}>Next</Button>
+        </div>
+      </div>
+
       {/* Approve Dialog */}
       <Dialog open={!!reviewNode} onOpenChange={() => setReviewNode(null)}>
         <DialogContent>
@@ -618,7 +631,7 @@ function PatternsSection() {
                 <TableCell className="font-medium text-xs">{p.name}</TableCell>
                 <TableCell><Badge variant="outline">{p.industry || "general"}</Badge></TableCell>
                 <TableCell className="text-xs max-w-32 truncate">{p.goal || "-"}</TableCell>
-                <TableCell>{p.confidence != null ? `${(p.confidence * 100).toFixed(0)}%` : "-"}</TableCell>
+                <TableCell>{p.confidence != null ? `${Math.round(p.confidence)}%` : "-"}</TableCell>
                 <TableCell>{statusBadge(p.status)}</TableCell>
                 <TableCell className="flex gap-1">
                   {p.status === "pending_review" && (

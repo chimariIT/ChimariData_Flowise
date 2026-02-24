@@ -1467,19 +1467,48 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
 
     } catch (error: any) {
       console.error('❌ Analysis execution error:', error);
-      const errorMsg = error?.message || 'Analysis execution failed. Please try again.';
-      setExecutionState(prev => ({
-        ...prev,
-        status: 'failed',
-        error: errorMsg,
-        currentStep: { ...prev.currentStep, status: 'failed', error: errorMsg }
-      }));
 
-      toast({
-        title: "Analysis Failed",
-        description: errorMsg,
-        variant: "destructive"
-      });
+      // DT-2 FIX: Detect transformation data integrity errors for specialized recovery UI
+      const errorDetails = error?.details || error?.data;
+      const isTransformationError = errorDetails?.errorType === 'TRANSFORMATION_DATA_MISSING' ||
+        error?.message?.includes('Data integrity error') ||
+        error?.message?.includes('Transformation was completed');
+
+      if (isTransformationError) {
+        const diagnostics = errorDetails?.diagnostics || {};
+        setExecutionState(prev => ({
+          ...prev,
+          status: 'failed',
+          error: error?.message || 'Transformation data missing',
+          currentStep: { ...prev.currentStep, status: 'failed', error: 'transformation_data_missing' },
+          transformationError: {
+            diagnostics,
+            datasetName: diagnostics.datasetName,
+            transformedAt: diagnostics.transformedAt,
+            hadTransformationSteps: diagnostics.hadTransformationSteps,
+          }
+        }));
+
+        toast({
+          title: "Transformation Data Missing",
+          description: `Dataset "${diagnostics.datasetName || 'unknown'}" was transformed but the data was not found. You can go back to the transformation step to re-run it.`,
+          variant: "destructive"
+        });
+      } else {
+        const errorMsg = error?.message || 'Analysis execution failed. Please try again.';
+        setExecutionState(prev => ({
+          ...prev,
+          status: 'failed',
+          error: errorMsg,
+          currentStep: { ...prev.currentStep, status: 'failed', error: errorMsg }
+        }));
+
+        toast({
+          title: "Analysis Failed",
+          description: errorMsg,
+          variant: "destructive"
+        });
+      }
     }
   };
 
@@ -3009,8 +3038,61 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
               </Card>
             )}
 
+            {/* DT-2 FIX: Specialized transformation data missing recovery UI */}
+            {executionStatus === 'failed' && (executionState as any).transformationError && (
+              <div className="space-y-4">
+                <div className="p-4 bg-amber-50 border-2 border-amber-300 rounded-lg">
+                  <div className="flex items-center gap-2 text-amber-800 mb-2">
+                    <AlertCircle className="w-5 h-5" />
+                    <span className="font-semibold">Transformation Data Missing</span>
+                  </div>
+                  <p className="text-sm text-amber-700 mb-2">
+                    Dataset &quot;{(executionState as any).transformationError?.datasetName || 'unknown'}&quot; was marked as transformed
+                    {(executionState as any).transformationError?.transformedAt
+                      ? ` on ${new Date((executionState as any).transformationError.transformedAt).toLocaleString()}`
+                      : ''
+                    }, but the transformed data could not be found.
+                    {(executionState as any).transformationError?.hadTransformationSteps
+                      ? ' Transformation steps were recorded — the data may have been lost during saving.'
+                      : ' No transformation steps were found — the transformation may not have completed.'
+                    }
+                  </p>
+                  <div className="flex gap-2 mt-3">
+                    <Button
+                      onClick={() => setLocation(`/journeys/${journeyType}/data-transformation?projectId=${resolvedProjectId}`)}
+                      className="bg-amber-600 hover:bg-amber-700 text-white"
+                    >
+                      Go to Transformation Step
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="border-amber-300 text-amber-700 hover:bg-amber-100"
+                      onClick={() => {
+                        setExecutionState({
+                          status: 'idle',
+                          overallProgress: 0,
+                          currentStep: { id: 'init', name: 'Ready to Retry', status: 'pending', description: 'Click Execute Analysis to try again...' },
+                          completedSteps: [],
+                          pendingSteps: [],
+                          analysisTypes: selectedAnalyses,
+                          startedAt: new Date().toISOString(),
+                          executionId: '',
+                          projectId: resolvedProjectId || '',
+                          totalSteps: 0,
+                          error: undefined
+                        });
+                      }}
+                    >
+                      <RefreshCw className="w-4 h-4 mr-2" />
+                      Retry Anyway
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* FIX Phase 3: Add proper error recovery UI for failed execution */}
-            {executionStatus === 'failed' && (
+            {executionStatus === 'failed' && !(executionState as any).transformationError && (
               <div className="space-y-4">
                 <div className="p-4 bg-red-50 border-2 border-red-300 rounded-lg">
                   <div className="flex items-center justify-between">

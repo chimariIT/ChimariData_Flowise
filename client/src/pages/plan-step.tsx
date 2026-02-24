@@ -188,17 +188,9 @@ export default function PlanStep({
         if (pollCountRef.current >= MAX_PLAN_POLLS) {
           if (intervalRef.current) clearInterval(intervalRef.current);
           intervalRef.current = null;
-          if (planPollRetryCount < 1) {
-            // Auto-retry once before showing manual retry
-            console.warn(`⚠️ [Plan] Polling timed out — auto-retrying (attempt ${planPollRetryCount + 1})`);
-            setPlanPollRetryCount(prev => prev + 1);
-            pollCountRef.current = 0;
-            // Re-trigger by force-regenerating the plan
-            handleForcePlanRegeneration();
-          } else {
-            setPollTimedOut(true);
-            console.warn(`⚠️ [Plan] Polling timed out after ${MAX_PLAN_POLLS} attempts and auto-retry`);
-          }
+          // PL-1 FIX: Always show manual retry immediately on timeout (no auto-regeneration without user consent)
+          setPollTimedOut(true);
+          console.warn(`⚠️ [Plan] Polling timed out after ${MAX_PLAN_POLLS} attempts — showing manual retry`);
           return;
         }
         await checkPlanProgress();
