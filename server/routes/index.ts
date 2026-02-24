@@ -36,6 +36,7 @@ import adminServicePricingRouter from './admin-service-pricing';
 import adminBillingRouter from './admin-billing';
 import adminKnowledgeRouter from './admin-knowledge';
 import adminKnowledgeReviewRouter from './admin-knowledge-review';
+import adminEmbeddingRouter from './admin-embedding';
 import projectSessionRouter from './project-session';
 import customJourneyRouter from './custom-journey';
 import analyzeDataRouter from './analyze-data';
@@ -75,29 +76,29 @@ router.post(
 router.use('/projects', dataVerificationRouter, projectRouter); // Data verification routes first (no dataset requirement), then project routes
 router.use('/', dataTransformationRouter); // Transformation endpoints (e.g., /transform-data/:projectId)
 router.use('/data-workflow', dataWorkflowRouter); // Resilient data workflow with interactive clarifications
-router.use('/data', dataRouter);
+router.use('/data', ensureAuthenticated, dataRouter);
 router.use('/datasets', ensureAuthenticated, datasetsRouter);
 router.use('/anonymization', ensureAuthenticated, anonymizationRouter);
 router.use('/ai', aiRouter);
-router.use('/export', exportRouter);
+router.use('/export', ensureAuthenticated, exportRouter);
 router.use('/payment', paymentRouter);
 router.use('/interactive', interactiveRouter);
 router.use('/analysis', analysisRouter); // Add the new analysis router to the main router
 router.use('/user', ensureAuthenticated, userRoleRouter); // User role and permission management - REQUIRES AUTH
-router.use('/usage', usageRouter); // Usage tracking and monitoring
+router.use('/usage', ensureAuthenticated, usageRouter); // Usage tracking and monitoring - P3-3 FIX: Added auth
 router.use('/ai/payment', aiPaymentRouter); // AI payment and pricing management
-router.use('/conversation', conversationRouter); // Conversational goal refinement
+router.use('/conversation', ensureAuthenticated, conversationRouter); // Conversational goal refinement - P3-3 FIX: Added auth
 router.use('/workflow', ensureAuthenticated, workflowRouter); // Workflow transparency and audit trail - REQUIRES AUTH
 router.use('/agents', ensureAuthenticated, agentsRouter); // Agent activities and intervention - REQUIRES AUTH
-router.use('/template', templateRouter); // Dynamic template generation and management
+router.use('/template', ensureAuthenticated, templateRouter); // Dynamic template generation and management - P3-3 FIX: Added auth
 router.use('/templates', templatesRouter); // Database-backed template API (Task 2.1)
-router.use('/enhanced-analysis', enhancedAnalysisRouter); // Enhanced analysis with full MCP integration
+router.use('/enhanced-analysis', ensureAuthenticated, enhancedAnalysisRouter); // Enhanced analysis with full MCP integration
 router.use('/analysis-execution', analysisExecutionRouter); // Real data analysis execution
 router.use('/', artifactsRouter); // Project artifact listing & downloads
 router.use('/billing', billingRouter); // Enhanced billing with capacity tracking
 router.use('/pricing', pricingRouter); // Pricing tiers and plans
-router.use('/analytics', analyticsRouter); // Tool analytics and system monitoring
-router.use('/template-onboarding', templateOnboardingRouter); // Business template research and onboarding
+router.use('/analytics', ensureAuthenticated, analyticsRouter); // Tool analytics and system monitoring
+router.use('/template-onboarding', ensureAuthenticated, templateOnboardingRouter); // Business template research and onboarding - P3-3 FIX: Added auth
 router.use('/consultation', consultationRouter); // Consultation request and workflow management
 router.use('/admin/consultations', adminConsultationRouter); // Admin consultation management
 router.use('/admin/consultation-pricing', adminConsultationPricingRouter); // Admin consultation pricing configuration
@@ -105,6 +106,7 @@ router.use('/admin/service-pricing', adminServicePricingRouter); // Admin servic
 router.use('/admin/billing', adminBillingRouter); // Admin billing and pricing management (database-backed)
 router.use('/admin/knowledge', adminKnowledgeRouter); // Admin knowledge graph CRUD, stats, seeding
 router.use('/admin/knowledge/review', adminKnowledgeReviewRouter); // Admin enrichment review, pattern approval, feedback processing
+router.use('/admin/embedding', adminEmbeddingRouter); // Admin embedding provider configuration and management
 router.use('/project-session', projectSessionRouter); // Secure server-side session state management
 router.use('/custom-journey', customJourneyRouter); // Custom "Build Your Own" journey capability selection
 router.use('/analyze-data', ensureAuthenticated, analyzeDataRouter); // Analysis with audience formatting

@@ -30,6 +30,7 @@ import {
   Database,
   ShieldAlert,
   Brain,
+  Cpu,
 } from "lucide-react";
 import AdminDashboard from "./admin-dashboard";
 import AgentManagement from "./agent-management";
@@ -46,6 +47,7 @@ import UserManagement from "./user-management";
 import ErrorTracking from "./error-tracking";
 import DatabaseOptimization from "./database-optimization";
 import KnowledgeManagement from "./knowledge-management";
+import EmbeddingManagement from "./embedding-management";
 
 interface AdminLayoutProps {
   user?: any;
@@ -271,6 +273,10 @@ export default function AdminLayout({ user }: AdminLayoutProps) {
               <Brain className="w-3 h-3" />
               Knowledge
             </TabsTrigger>
+            <TabsTrigger value="embeddings" className="flex items-center gap-1 text-xs">
+              <Cpu className="w-3 h-3" />
+              Embeddings
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="dashboard">
@@ -327,6 +333,10 @@ export default function AdminLayout({ user }: AdminLayoutProps) {
 
           <TabsContent value="knowledge">
             <KnowledgeManagement />
+          </TabsContent>
+
+          <TabsContent value="embeddings">
+            <EmbeddingManagement />
           </TabsContent>
         </Tabs>
       </div>

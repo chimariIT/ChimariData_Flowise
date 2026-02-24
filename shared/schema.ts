@@ -2170,6 +2170,8 @@ export const knowledgeEdges = pgTable("knowledge_edges", {
 }, (table) => ({
   sourceTargetIdx: index("knowledge_edges_source_target_idx").on(table.sourceId, table.targetId),
   relationshipIdx: index("knowledge_edges_relationship_idx").on(table.relationship),
+  // P1-9 FIX: Unique constraint to prevent duplicate edges
+  sourceTargetRelUnique: uniqueIndex("knowledge_edges_source_target_rel_unique").on(table.sourceId, table.targetId, table.relationship),
   sourceFk: foreignKey({
     columns: [table.sourceId],
     foreignColumns: [knowledgeNodes.id],
@@ -3369,6 +3371,7 @@ export const columnEmbeddings = pgTable("column_embeddings", {
   columnType: varchar("column_type"),
   sampleValues: jsonb("sample_values"),
   metadata: jsonb("metadata"),
+  configVersion: integer("config_version").default(0),  // Tracks which embedding config generated this
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   datasetIdIdx: index("column_embeddings_dataset_id_idx").on(table.datasetId),
@@ -3384,6 +3387,14 @@ export const insertColumnEmbeddingsSchema = createInsertSchema(columnEmbeddings)
 export const analysisPricingConfig = pgTable("analysis_pricing_config", {
   id: varchar("id").primaryKey().notNull(),
   config: jsonb("config").notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  updatedBy: varchar("updated_by"),
+});
+
+// Embedding Provider Configuration — admin-configurable provider settings
+export const embeddingProviderConfig = pgTable("embedding_provider_config", {
+  id: varchar("id").primaryKey().notNull(),    // 'default'
+  config: jsonb("config").notNull(),            // EmbeddingProviderConfig JSON
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
   updatedBy: varchar("updated_by"),
 });
