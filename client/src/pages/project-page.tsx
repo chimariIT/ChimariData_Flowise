@@ -52,9 +52,8 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
   // Feature flag defaults to false for safety - only enable when explicitly set
   const enableSlaMetrics = import.meta.env.VITE_FEATURE_SLA_METRICS === 'true';
 
-  // SLA metrics: endpoint /api/performance/metrics/my-uploads is NOT currently registered
-  // in the server routes. This query is gated behind VITE_FEATURE_SLA_METRICS=true.
-  // When the performance router is re-enabled, register it in server/routes/index.ts.
+  // SLA metrics: endpoint /api/performance/metrics/my-uploads is gated behind VITE_FEATURE_SLA_METRICS=true.
+  // Disable the flag if the performance router is not enabled in server/routes/index.ts.
   const { data: uploadMetricsSummary, isLoading: isUploadMetricsLoading } = useQuery({
     queryKey: ['performance-metrics', projectId],
     queryFn: async () => {

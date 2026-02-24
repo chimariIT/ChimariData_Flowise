@@ -42,6 +42,7 @@ import customJourneyRouter from './custom-journey';
 import analyzeDataRouter from './analyze-data';
 import audienceFormattingRouter from './audience-formatting';
 import businessTemplateSynthesisRouter from './business-template-synthesis';
+import performanceWebhooksRouter from './performance-webhooks';
 import pmClarificationRouter from './pm-clarification';
 import projectManagerRouter from './project-manager';
 import dataVerificationRouter from './data-verification';
@@ -98,6 +99,7 @@ router.use('/', artifactsRouter); // Project artifact listing & downloads
 router.use('/billing', billingRouter); // Enhanced billing with capacity tracking
 router.use('/pricing', pricingRouter); // Pricing tiers and plans
 router.use('/analytics', ensureAuthenticated, analyticsRouter); // Tool analytics and system monitoring
+router.use('/performance', performanceWebhooksRouter); // Performance metrics + webhook management
 router.use('/template-onboarding', ensureAuthenticated, templateOnboardingRouter); // Business template research and onboarding - P3-3 FIX: Added auth
 router.use('/consultation', consultationRouter); // Consultation request and workflow management
 router.use('/admin/consultations', adminConsultationRouter); // Admin consultation management

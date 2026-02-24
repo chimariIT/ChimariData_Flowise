@@ -140,6 +140,32 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
 
   const { project, journeyProgress, updateProgress, isUpdating } = useProject(currentProjectId || undefined);
 
+  const getExpectedPiiFileNames = useCallback(() => {
+    const fromValidation = Object.keys(dataValidation);
+    if (fromValidation.length > 0) return fromValidation;
+
+    const fromPreview = Object.keys(dataPreview);
+    if (fromPreview.length > 0) return fromPreview;
+
+    if (uploadedFiles.length > 0) {
+      return uploadedFiles.map(file => file.name);
+    }
+
+    return [];
+  }, [dataValidation, dataPreview, uploadedFiles]);
+
+  const hasAllPiiDecisions = useCallback((decisions?: Record<string, {
+    excludedColumns: string[];
+    anonymizedColumns: string[];
+    decisionTimestamp: string;
+  }>) => {
+    if (!decisions) return false;
+    const expectedFileNames = getExpectedPiiFileNames();
+    if (expectedFileNames.length === 0) return false;
+    const decisionFileNames = new Set(Object.keys(decisions));
+    return expectedFileNames.every(name => decisionFileNames.has(name));
+  }, [getExpectedPiiFileNames]);
+
   const aggregatedValidation = useMemo(() => {
     const entries = Object.values(dataValidation);
     if (!entries.length) return null;
@@ -466,18 +492,13 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
     if (journeyProgress.piiDecisionsByFile && Object.keys(journeyProgress.piiDecisionsByFile).length > 0) {
       setPiiDecisionsByFile(journeyProgress.piiDecisionsByFile);
       // Only mark review complete if ALL uploaded files have decisions
-      // (not just "any" file — prevents bypass after partial review + refresh)
-      const decisionFileNames = new Set(Object.keys(journeyProgress.piiDecisionsByFile));
-      const validatedFileNames = Object.keys(dataValidation);
-      const allFilesReviewed = validatedFileNames.length > 0
-        && validatedFileNames.every(name => decisionFileNames.has(name));
-      if (allFilesReviewed) {
+      if (hasAllPiiDecisions(journeyProgress.piiDecisionsByFile)) {
         setPiiReviewCompleted(true);
       }
     } else if (journeyProgress.piiDecision) {
       // Legacy single-file mode: if there's exactly 1 file, this is sufficient
-      const validatedFileCount = Object.keys(dataValidation).length;
-      if (validatedFileCount <= 1) {
+      const expectedFileCount = getExpectedPiiFileNames().length;
+      if (expectedFileCount <= 1) {
         setPiiReviewCompleted(true);
       }
     }
@@ -489,7 +510,7 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
     if (journeyProgress.dataQualityApproved) {
       setDataQualityApproved(true);
     }
-  }, [journeyProgress, dataValidation]);
+  }, [journeyProgress, hasAllPiiDecisions, getExpectedPiiFileNames]);
 
   const getJourneyTypeInfo = () => {
     switch (journeyType) {
@@ -608,7 +629,7 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
             return prev; // Already processed
           }
           console.log(`✅ [PII] No PII detected in ${fileName}, marked as completed`);
-          return {
+          const next = {
             ...prev,
             [fileName]: {
               excludedColumns: [],
@@ -616,19 +637,29 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
               decisionTimestamp: new Date().toISOString()
             }
           };
+          if (hasAllPiiDecisions(next)) {
+            setPiiReviewCompleted(true);
+          }
+          return next;
         });
       }
     } catch (error) {
       console.error(`❌ [PII] Error detecting PII for ${fileName}:`, error);
       // On error, mark as completed (no PII)
-      setPiiDecisionsByFile(prev => ({
-        ...prev,
-        [fileName]: {
-          excludedColumns: [],
-          anonymizedColumns: [],
-          decisionTimestamp: new Date().toISOString()
+      setPiiDecisionsByFile(prev => {
+        const next = {
+          ...prev,
+          [fileName]: {
+            excludedColumns: [],
+            anonymizedColumns: [],
+            decisionTimestamp: new Date().toISOString()
+          }
+        };
+        if (hasAllPiiDecisions(next)) {
+          setPiiReviewCompleted(true);
         }
-      }));
+        return next;
+      });
     }
   };
 
@@ -770,7 +801,12 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
     }
 
     // Validate PII review completed - also check journeyProgress
-    const piiCompleted = piiReviewCompleted || (journeyProgress?.piiDecision != null) || (journeyProgress?.piiDecisionsByFile && Object.keys(journeyProgress.piiDecisionsByFile).length > 0);
+    const decisionsSource = (journeyProgress?.piiDecisionsByFile && Object.keys(journeyProgress.piiDecisionsByFile).length > 0)
+      ? journeyProgress.piiDecisionsByFile
+      : piiDecisionsByFile;
+    const allReviewed = hasAllPiiDecisions(decisionsSource);
+    const legacyReviewed = journeyProgress?.piiDecision != null && getExpectedPiiFileNames().length <= 1;
+    const piiCompleted = allReviewed || legacyReviewed;
     if (!piiCompleted) {
       toast({
         title: "PII Review Required",
@@ -837,7 +873,6 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
     anonymizedColumns?: string[],
     excludedCols?: string[]
   ) => {
-    setPiiReviewCompleted(true);
     setShowPIIDialog(false);
 
     if (excludedCols && excludedCols.length > 0) {
@@ -845,18 +880,19 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
       filterDataPreviewColumns(excludedCols);
     }
 
-    if (currentProjectId) {
-      // DU-1 FIX B: Persist PII decisions incrementally per-file (not just on Continue)
-      const updatedDecisions = { ...piiDecisionsByFile };
-      if (currentPIIFile) {
-        updatedDecisions[currentPIIFile] = {
-          excludedColumns: excludedCols || [],
-          anonymizedColumns: anonymizedColumns || [],
-          decisionTimestamp: new Date().toISOString()
-        };
-        setPiiDecisionsByFile(updatedDecisions);
-      }
+    // DU-1 FIX B: Persist PII decisions incrementally per-file (not just on Continue)
+    const updatedDecisions = { ...piiDecisionsByFile };
+    if (currentPIIFile) {
+      updatedDecisions[currentPIIFile] = {
+        excludedColumns: excludedCols || [],
+        anonymizedColumns: anonymizedColumns || [],
+        decisionTimestamp: new Date().toISOString()
+      };
+      setPiiDecisionsByFile(updatedDecisions);
+      setPiiReviewCompleted(hasAllPiiDecisions(updatedDecisions));
+    }
 
+    if (currentProjectId) {
       updateProgress({
         piiDecision: {
           excludedColumns: excludedCols || [],
@@ -1259,12 +1295,14 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
     }
 
     // Persist PII decision for this file
+    const updatedDecisions = {
+      ...(journeyProgress?.piiDecisionsByFile || {}),
+      [currentPIIFile]: fileDecision
+    };
+
     if (currentProjectId) {
       updateProgress({
-        piiDecisionsByFile: {
-          ...(journeyProgress?.piiDecisionsByFile || {}),
-          [currentPIIFile]: fileDecision
-        },
+        piiDecisionsByFile: updatedDecisions,
         // Also maintain aggregate for backwards compatibility
         piiDecision: {
           ...(journeyProgress?.piiDecision || {}),
@@ -1277,17 +1315,11 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
       });
     }
 
+    setPiiDecisionsByFile(updatedDecisions);
+    setPiiReviewCompleted(hasAllPiiDecisions(updatedDecisions));
+
     // Remove this file from queue and close dialog
-    setPiiQueue(prev => {
-      const remainingQueue = prev.filter(item => item.fileName !== currentPIIFile);
-      
-      // Check if all files have been processed (after removal)
-      if (remainingQueue.length === 0) {
-        setPiiReviewCompleted(true);
-      }
-      
-      return remainingQueue;
-    });
+    setPiiQueue(prev => prev.filter(item => item.fileName !== currentPIIFile));
     setShowPIIDialog(false);
     setCurrentPIIFile(null);
     setPiiDetectionResult(null);
