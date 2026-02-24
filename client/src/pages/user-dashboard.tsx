@@ -144,24 +144,27 @@ export default function UserDashboard({ user, onLogout }: UserDashboardProps) {
   };
 
   const handleViewProject = (projectId: string, project?: DashboardProject) => {
-    // Completed projects → results page; in-progress → monitoring dashboard
-    // Check multiple indicators since completion is expressed via status, analysisResults, or executionStatus
     const p = project as any;
-    const isCompleted = project?.status === 'completed'
-      || !!p?.analysisResults
-      || p?.journeyProgress?.executionStatus === 'completed';
-
-    // Journey complete but not paid → route to pricing step
     const jp = p?.journeyProgress;
+
+    // Check unpaid-complete FIRST — prevents routing to results when payment is still needed
     const isJourneyDone = jp?.percentComplete >= 100
       || (Array.isArray(jp?.completedSteps) && jp.completedSteps.length >= 8);
     const hasNotPaid = !(project as any)?.isPaid && !p?.analysisResults;
 
-    if (isCompleted) {
-      setLocation(`/projects/${projectId}/results`);
-    } else if (isJourneyDone && hasNotPaid) {
+    if (isJourneyDone && hasNotPaid) {
       const journeyType = (project as any)?.journeyType || 'non-tech';
       setLocation(`/journeys/${journeyType}/pricing?projectId=${projectId}`);
+      return;
+    }
+
+    // Completed projects → results page; in-progress → monitoring dashboard
+    const isCompleted = project?.status === 'completed'
+      || !!p?.analysisResults
+      || jp?.executionStatus === 'completed';
+
+    if (isCompleted) {
+      setLocation(`/projects/${projectId}/results`);
     } else {
       setLocation(`/project/${projectId}`);
     }
