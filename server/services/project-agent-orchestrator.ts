@@ -1604,7 +1604,7 @@ export class ProjectAgentOrchestrator {
               industry: jp.industry || undefined,
               useCase: goals || undefined,
               businessGoals: questionTexts.length > 0 ? questionTexts : (goals ? [goals] : undefined),
-              keywords: jp.requirementsDocument?.dataElements
+              keywords: jp.requirementsDocument?.requiredDataElements
                 ?.map((e: any) => e.sourceColumn).filter(Boolean)?.slice(0, 10) || undefined,
               complexityLevel: jp.analysisComplexity || 'intermediate'
             });

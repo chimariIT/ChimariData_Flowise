@@ -4394,15 +4394,30 @@ export async function executeTool(
           'dataset_join': 'join_datasets',
           'data_aggregation': 'group_by',
           'pivot_table': 'pivot',
-          'format_conversion': 'format_conversion',
-          'dedup_dataset': 'dedup',
-          'add_calculated_column': 'add_column',
+          'format_conversion': 'convert_format',
+          'dedup_dataset': 'remove_duplicates',
+          'add_calculated_column': 'add_calculated_column',
           'filter_transform': 'filter_rows'
         };
 
+        // Build inputData — special handling for dataset_join which expects TransformationInput[]
+        let transformInputData: any = input.inputData || input.data || [];
+        if (toolName === 'dataset_join') {
+          // dataset_join callers pass leftData/rightData in parameters;
+          // jsJoinDatasets reads from inputs[0].data and inputs[1].data
+          const leftData = input.leftData || input.parameters?.leftData || [];
+          const rightData = input.rightData || input.parameters?.rightData || [];
+          if ((Array.isArray(leftData) && leftData.length > 0) || (Array.isArray(rightData) && rightData.length > 0)) {
+            transformInputData = [
+              { data: leftData, alias: 'left' },
+              { data: rightData, alias: 'right' }
+            ];
+          }
+        }
+
         const transformResult = await transformer.transform({
           operation: (operationMap[toolName] || toolName) as any,
-          inputData: input.inputData || input.data || [],
+          inputData: transformInputData,
           parameters: input.parameters || input,
           outputFormat: input.outputFormat || 'json',
           optimizationHint: input.optimizationHint || 'balanced',
