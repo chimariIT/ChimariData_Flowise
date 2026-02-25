@@ -349,18 +349,38 @@ export class PMToolHandlers {
         }
 
         case 'getStatus': {
-          // Get checkpoint status
+          // Retrieve checkpoint status from project's journeyProgress
+          const { storage } = await import('./storage');
+          const project = await storage.getProject(input.projectId);
+          const jp = (project as any)?.journeyProgress || {};
+
+          // Check multiple possible checkpoint storage locations
+          const checkpoints = jp.checkpoints || jp.agentCheckpoints || [];
+          const checkpointArray = Array.isArray(checkpoints) ? checkpoints : [];
+
+          // Find specific checkpoint by ID, or return latest
+          const targetId = input.checkpointId;
+          const checkpoint = targetId
+            ? checkpointArray.find((c: any) => c.id === targetId || c.checkpointId === targetId)
+            : checkpointArray[checkpointArray.length - 1] || null;
+
           return {
             executionId: context.executionId,
             toolId: 'checkpoint_manager',
             status: 'success',
             result: {
               operation: 'getStatus',
-              message: 'Checkpoint status retrieval not yet implemented'
+              found: !!checkpoint,
+              checkpoint: checkpoint || null,
+              totalCheckpoints: checkpointArray.length,
+              latestStage: checkpoint?.stage || checkpoint?.step || 'unknown',
+              message: checkpoint
+                ? `Checkpoint at stage: ${checkpoint.stage || checkpoint.step}`
+                : 'No checkpoints found for this project'
             },
             metrics: {
               duration: Date.now() - startTime,
-              resourcesUsed: { cpu: 0.1, memory: 1, storage: 0 },
+              resourcesUsed: { cpu: 0.05, memory: 1, storage: 0 },
               cost: 0.001
             }
           };

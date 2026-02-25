@@ -691,10 +691,20 @@ result_df = df.pivot(
 
       case 'join_datasets':
         const join = params as JoinConfig;
+        const joinLeftKey = Array.isArray(join.leftKey) ? join.leftKey : [join.leftKey];
+        const joinRightKey = Array.isArray(join.rightKey) ? join.rightKey : [join.rightKey];
         script += `
-# Polars join - requires second dataframe
-# For now, return original dataframe
-result_df = df
+# Polars join with second dataframe from input
+import json as _json
+_right_data = _json.loads('''${JSON.stringify(join.rightData || config.inputData?.[1]?.data || [])}''')
+df_right = pl.DataFrame(_right_data)
+result_df = df.join(
+  df_right,
+  left_on=${JSON.stringify(joinLeftKey)},
+  right_on=${JSON.stringify(joinRightKey)},
+  how='${join.joinType || 'inner'}',
+  suffix='${join.suffixes?.[1] || '_right'}'
+)
   `;
         break;
 
@@ -777,9 +787,20 @@ result_df = df.pivot_table(
         break;
 
       case 'join_datasets':
+        const joinPd = params as JoinConfig;
+        const joinPdLeftKey = Array.isArray(joinPd.leftKey) ? joinPd.leftKey : [joinPd.leftKey];
+        const joinPdRightKey = Array.isArray(joinPd.rightKey) ? joinPd.rightKey : [joinPd.rightKey];
         script += `
-# Placeholder for join - requires multiple dataframes
-result_df = df
+import json as _json
+_right_data = _json.loads('''${JSON.stringify(joinPd.rightData || config.inputData?.[1]?.data || [])}''')
+df_right = pd.DataFrame(_right_data)
+result_df = df.merge(
+  df_right,
+  left_on=${JSON.stringify(joinPdLeftKey)},
+  right_on=${JSON.stringify(joinPdRightKey)},
+  how='${joinPd.joinType || 'inner'}',
+  suffixes=('${joinPd.suffixes?.[0] || ''}', '${joinPd.suffixes?.[1] || '_right'}')
+)
     `;
         break;
 

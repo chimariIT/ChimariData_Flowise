@@ -1,5 +1,6 @@
 // server/services/agent-initialization.ts
 import {
+  AgentComplexity,
   AgentHandler,
   AgentRegistry,
   AgentResult,
@@ -193,6 +194,17 @@ export class AgentInitializationService {
         failed.push({ name: 'Customer Support', error: String(error) });
       }
 
+      // Initialize Template Research Agent
+      try {
+        if (!registeredAgentIds.has('template_research_agent')) {
+          await this.initializeTemplateResearchAgent();
+          registeredAgentIds.add('template_research_agent');
+          registered.push({ name: 'Template Research', capabilities: ['Template Research', 'Web Research', 'Knowledge Base'] });
+        }
+      } catch (error) {
+        failed.push({ name: 'Template Research', error: String(error) });
+      }
+
       // Initialize existing agents (adapting them to the new system)
       try {
         await this.initializeExistingAgents();
@@ -315,6 +327,66 @@ export class AgentInitializationService {
     this.initializedAgents.set('customer_support', customerSupport);
     
     console.log('🎧 Customer Support Agent registered successfully');
+  }
+
+  private async initializeTemplateResearchAgent(): Promise<void> {
+    const { templateResearchAgent } = await import('./template-research-agent');
+
+    const agentMetadata = {
+      id: 'template_research_agent',
+      name: 'Template Research',
+      description: 'Specialized agent for template research, industry knowledge discovery, and web research',
+      type: 'specialist',
+      version: '1.0.0',
+      capabilities: [
+        { name: 'template_research', description: 'Find and match industry templates', inputTypes: ['text', 'keywords'], outputTypes: ['template'], complexity: 'medium' as AgentComplexity, estimatedDuration: 30, requiredResources: ['template_catalog'], tags: ['research', 'templates'] },
+        { name: 'web_research', description: 'Research industry trends and best practices', inputTypes: ['text'], outputTypes: ['research_results'], complexity: 'medium' as AgentComplexity, estimatedDuration: 60, requiredResources: ['web_access'], tags: ['research', 'web'] },
+        { name: 'knowledge_base', description: 'Build and query knowledge bases', inputTypes: ['text', 'data'], outputTypes: ['knowledge_graph'], complexity: 'high' as AgentComplexity, estimatedDuration: 120, requiredResources: ['storage'], tags: ['knowledge', 'discovery'] }
+      ],
+      priority: 3,
+      maxConcurrentTasks: 2,
+      healthCheck: {
+        endpoint: '/health/template-research',
+        interval: 30000,
+        timeout: 5000
+      },
+      configuration: {
+        supportedDomains: ['hr', 'sales', 'marketing', 'finance', 'healthcare', 'education', 'general'],
+        maxResearchTime: 60000, // 1 minute
+        templateCatalogSize: 50
+      },
+      contactInfo: {
+        escalationPath: ['project_manager'],
+        responseTime: '5-30 seconds',
+        expertise: ['Template Research', 'Industry Patterns', 'Knowledge Discovery']
+      }
+    };
+
+    // Create adapter that wraps the singleton agent (implements full AgentHandler interface)
+    const agentAdapter: AgentHandler = {
+      async execute(task: AgentTask): Promise<AgentResult> {
+        const startTime = Date.now();
+        try {
+          const result = await templateResearchAgent.researchTemplate(task.payload);
+          return createSuccessResult(task, 'template_research_agent', result, Date.now() - startTime, ['template_catalog', 'web_search']);
+        } catch (error) {
+          return createFailureResult(task, 'template_research_agent', error, Date.now() - startTime, []);
+        }
+      },
+      validateTask(task: AgentTask): boolean {
+        return !!task.payload && (!!task.payload.industry || !!task.payload.useCase || !!task.payload.businessGoals);
+      },
+      async getStatus(): Promise<AgentStatus> {
+        return { status: 'active', currentTasks: 0, queuedTasks: 0, lastActivity: new Date(), resourceUsage: { cpu: 0, memory: 0, storage: 0 } };
+      },
+      async configure(): Promise<void> { /* no-op */ },
+      async shutdown(): Promise<void> { /* no-op */ }
+    };
+
+    await this.registry.registerAgent(agentMetadata, agentAdapter);
+    this.initializedAgents.set('template_research_agent', agentAdapter);
+
+    console.log('📚 Template Research Agent registered successfully');
   }
 
   private async initializeExistingAgents(): Promise<void> {

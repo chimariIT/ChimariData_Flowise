@@ -339,64 +339,68 @@ function getProjectManagerStatus(project: any) {
 }
 
 function getDataScientistStatus(project: any) {
-  switch (project.workflowStep) {
-    case 'questions':
-      return {
-        activity: 'Waiting for data upload',
-        status: 'waiting_for_user',
-        currentTask: 'Ready to process data once uploaded',
-        progress: 0,
-        remainingMinutes: 0
-      };
-    case 'upload':
-      return {
-        activity: 'Validating uploaded data',
-        status: 'active',
-        currentTask: 'Performing data quality checks',
-        progress: 30,
-        remainingMinutes: 8
-      };
-    case 'scan':
-      return {
-        activity: 'Security scanning complete',
-        status: 'active',
-        currentTask: 'Analyzing data schema and structure',
-        progress: 50,
-        remainingMinutes: 12
-      };
-    case 'schema':
-      return {
-        activity: 'Preparing analysis pipeline',
-        status: 'active',
-        currentTask: 'Setting up statistical analysis workflow',
-        progress: 70,
-        remainingMinutes: 18
-      };
-    case 'analysis':
-      return {
-        activity: 'Executing analysis',
-        status: 'active',
-        currentTask: 'Running machine learning algorithms',
-        progress: 85,
-        remainingMinutes: 25
-      };
-    case 'complete':
-      return {
-        activity: 'Analysis complete',
-        status: 'idle',
-        currentTask: 'Available for additional analysis requests',
-        progress: 100,
-        remainingMinutes: 0
-      };
-    default:
-      return {
-        activity: 'Initializing',
-        status: 'idle',
-        currentTask: 'Preparing analysis capabilities',
-        progress: 0,
-        remainingMinutes: 1
-      };
+  // Use journey-state-aware activity messages instead of hardcoded strings
+  const jp = project?.journeyProgress || {};
+  const currentStep = jp.currentStepId || '';
+  const percentComplete = jp.percentComplete || 0;
+  const analysisType = jp.analysisType || project?.analysisType || 'statistical';
+
+  if (percentComplete >= 100) {
+    return {
+      activity: 'Analysis complete',
+      status: 'idle',
+      currentTask: `${analysisType} analysis results are available`,
+      progress: 100,
+      remainingMinutes: 0
+    };
   }
+
+  if (percentComplete === 0 || (!currentStep && !project.workflowStep)) {
+    return {
+      activity: 'Waiting for data',
+      status: 'waiting_for_user',
+      currentTask: 'Ready to begin analysis once data is uploaded',
+      progress: 0,
+      remainingMinutes: 0
+    };
+  }
+
+  // Map current journey step OR legacy workflowStep to contextual activity
+  const stepKey = currentStep || project.workflowStep || '';
+  const stepActivities: Record<string, { activity: string; task: string; progress: number; minutes: number }> = {
+    'data_upload': { activity: 'Processing uploaded data', task: 'Validating data format and quality', progress: 20, minutes: 8 },
+    'upload': { activity: 'Processing uploaded data', task: 'Validating data format and quality', progress: 20, minutes: 8 },
+    'data_verification': { activity: 'Verifying data integrity', task: 'Running quality checks and PII detection', progress: 35, minutes: 10 },
+    'scan': { activity: 'Verifying data integrity', task: 'Running quality checks and PII detection', progress: 35, minutes: 10 },
+    'data_transformation': { activity: 'Transforming data', task: 'Applying data transformations and column mappings', progress: 50, minutes: 12 },
+    'schema': { activity: 'Preparing analysis pipeline', task: `Setting up ${analysisType} analysis workflow`, progress: 60, minutes: 15 },
+    'analysis_planning': { activity: 'Planning analysis', task: `Designing ${analysisType} analysis pipeline`, progress: 70, minutes: 18 },
+    'questions': { activity: 'Gathering requirements', task: 'Waiting for user questions and analysis goals', progress: 10, minutes: 5 },
+    'execution': { activity: 'Executing analysis', task: `Running ${analysisType} analysis on your data`, progress: 85, minutes: 25 },
+    'analysis': { activity: 'Executing analysis', task: `Running ${analysisType} analysis on your data`, progress: 85, minutes: 25 },
+    'results_translation': { activity: 'Translating results', task: 'Generating business-ready insights', progress: 95, minutes: 5 }
+  };
+
+  const stepInfo = stepActivities[stepKey];
+  if (stepInfo) {
+    return {
+      activity: stepInfo.activity,
+      status: 'active',
+      currentTask: stepInfo.task,
+      progress: percentComplete > 0 ? percentComplete : stepInfo.progress,
+      remainingMinutes: stepInfo.minutes
+    };
+  }
+
+  // Fallback for unknown steps — derive from percentComplete
+  const estimatedMinutes = Math.max(0, Math.round((100 - percentComplete) * 0.3));
+  return {
+    activity: percentComplete > 0 ? `Processing (${percentComplete}% complete)` : 'Initializing',
+    status: percentComplete > 0 ? 'active' : 'idle',
+    currentTask: stepKey ? `Working on ${stepKey.replace(/_/g, ' ')}` : 'Preparing analysis capabilities',
+    progress: percentComplete || 0,
+    remainingMinutes: estimatedMinutes
+  };
 }
 
 function getBusinessAgentStatus(project: any) {

@@ -1585,61 +1585,71 @@ export class ProjectAgentOrchestrator {
           }
           return { message: 'Data Scientist step completed', agent: 'data_scientist', status: 'completed' };
 
-        // GAP R1 FIX: Add Template Research agent case
-        case 'template_research_agent':
+        // Wire real TemplateResearchAgent (replaces hardcoded keyword matching)
+        case 'template_research_agent': {
           console.log(`📚 [Research Agent] Executing Template Research step: ${step.id}`);
-          if (step.id.includes('template') || step.id.includes('research')) {
+          try {
+            const { templateResearchAgent } = await import('./template-research-agent');
+            const { storage } = await import('./storage');
+            const project = await storage.getProject(projectId);
+            const jp = (project as any)?.journeyProgress || {};
+
+            // Build research request from project context
+            const goals = jp.goals || jp.analysisGoal || '';
+            const questions = jp.businessQuestions || jp.userQuestions || [];
+            const questionTexts = (Array.isArray(questions) ? questions : [])
+              .map((q: any) => typeof q === 'string' ? q : q?.text || '').filter(Boolean);
+
+            const researchResult = await templateResearchAgent.researchTemplate({
+              industry: jp.industry || undefined,
+              useCase: goals || undefined,
+              businessGoals: questionTexts.length > 0 ? questionTexts : (goals ? [goals] : undefined),
+              keywords: jp.requirementsDocument?.dataElements
+                ?.map((e: any) => e.sourceColumn).filter(Boolean)?.slice(0, 10) || undefined,
+              complexityLevel: jp.analysisComplexity || 'intermediate'
+            });
+
+            // Persist recommendation to journeyProgress
+            await storage.atomicMergeJourneyProgress(projectId, {
+              researcherRecommendation: {
+                template: researchResult.template || researchResult,
+                confidence: researchResult.confidence ?? 0.7,
+                sources: researchResult.researchSources || [],
+                recommendedAt: new Date().toISOString()
+              }
+            });
+
+            console.log(`✅ [Research Agent] Recommended template: ${researchResult.template?.name || 'unknown'} (confidence: ${researchResult.confidence})`);
+            return {
+              message: 'Template research completed',
+              agent: 'template_research_agent',
+              template: researchResult.template,
+              confidence: researchResult.confidence,
+              status: 'completed'
+            };
+          } catch (error) {
+            console.error(`❌ [Research Agent] Error, using fallback:`, error);
+            // Graceful fallback — return general template so pipeline continues
             try {
               const { storage } = await import('./storage');
-              const project = await storage.getProject(projectId);
-              const journeyProgress = (project as any)?.journeyProgress || {};
-
-              // Get goals and questions for template matching
-              const goals = journeyProgress.goals || journeyProgress.analysisGoal || '';
-              const questions = journeyProgress.businessQuestions || [];
-              const combinedText = `${goals} ${Array.isArray(questions) ? questions.join(' ') : ''}`.toLowerCase();
-
-              // Template matching logic
-              let template = null;
-              let confidence = 0.7;
-
-              if (combinedText.includes('employee') || combinedText.includes('hr') || combinedText.includes('engagement')) {
-                template = { id: 'hr_analytics', name: 'HR Analytics', domain: 'human_resources' };
-                confidence = 0.85;
-              } else if (combinedText.includes('sales') || combinedText.includes('revenue')) {
-                template = { id: 'sales_analytics', name: 'Sales Analytics', domain: 'sales' };
-                confidence = 0.82;
-              } else if (combinedText.includes('marketing') || combinedText.includes('campaign')) {
-                template = { id: 'marketing_analytics', name: 'Marketing Analytics', domain: 'marketing' };
-                confidence = 0.80;
-              } else {
-                template = { id: 'general_analytics', name: 'General Analytics', domain: 'general' };
-                confidence = 0.65;
-              }
-
-              // Store researcher recommendation
               await storage.atomicMergeJourneyProgress(projectId, {
                 researcherRecommendation: {
-                  template,
-                  confidence,
+                  template: { id: 'general_analytics', name: 'General Analytics', domain: 'general' },
+                  confidence: 0.5,
+                  fallback: true,
                   recommendedAt: new Date().toISOString()
                 }
               });
-
-              console.log(`✅ [Research Agent] Recommended template: ${template?.name}`);
-              return {
-                message: 'Template research completed',
-                agent: 'template_research_agent',
-                template,
-                confidence,
-                status: 'completed'
-              };
-            } catch (error) {
-              console.error(`❌ [Research Agent] Error:`, error);
-              return { message: 'Template research step completed with fallback', agent: 'template_research_agent', status: 'completed' };
-            }
+            } catch { /* ignore persistence error in fallback */ }
+            return {
+              message: 'Template research completed with fallback',
+              agent: 'template_research_agent',
+              template: { id: 'general_analytics', name: 'General Analytics', domain: 'general' },
+              confidence: 0.5,
+              status: 'completed'
+            };
           }
-          return { message: 'Template research step completed', agent: 'template_research_agent', status: 'completed' };
+        }
 
         default:
           console.warn(`⚠️  Unknown agent type: ${step.agent} for step ${step.id}`);

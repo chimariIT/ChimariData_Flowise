@@ -255,17 +255,31 @@ export class MCPToolRegistry {
    */
   static findToolsByIntent(intentDescription: string): ToolDefinition[] {
     const keywords = intentDescription.toLowerCase().split(/\s+/).filter(k => k.length > 3);
-    return this.getAllTools().filter(tool => {
-      const toolText = `${tool.name} ${tool.description} ${tool.category}`.toLowerCase();
-      // Simple scoring: count matching keywords
-      const matchCount = keywords.reduce((count, keyword) => {
-        return count + (toolText.includes(keyword) ? 1 : 0);
-      }, 0);
-      return matchCount > 0;
-    }).sort((a, b) => {
-      // Sort by rudimentary relevance (would use embeddings in future)
-      return 0; // Stable sort for now, rely on filter
-    });
+    if (keywords.length === 0) return [];
+
+    const scored = this.getAllTools().map(tool => {
+      const nameText = (tool.name || '').toLowerCase();
+      const descText = (tool.description || '').toLowerCase();
+      const catText = (tool.category || '').toLowerCase();
+      const tagText = ((tool as any).tags || []).join(' ').toLowerCase();
+
+      let score = 0;
+      for (const keyword of keywords) {
+        // Name match: highest weight — tool name is most specific
+        if (nameText.includes(keyword)) score += 3;
+        // Category match: high weight — structural relevance
+        else if (catText.includes(keyword)) score += 2;
+        // Tag match: medium weight — curated metadata
+        else if (tagText.includes(keyword)) score += 1.5;
+        // Description match: base weight — broad text match
+        else if (descText.includes(keyword)) score += 1;
+      }
+      return { tool, score };
+    }).filter(s => s.score > 0);
+
+    // Sort by relevance score descending for best matches first
+    scored.sort((a, b) => b.score - a.score);
+    return scored.map(s => s.tool);
   }
 
   /**
@@ -4356,6 +4370,53 @@ export async function executeTool(
           metrics: {
             duration: 0,
             resourcesUsed: { cpu: 0.2, memory: 100, storage: 0 },
+            cost: 0.002
+          }
+        };
+        break;
+      }
+
+      // Intelligent Data Transformer tools — route to real implementations
+      case 'intelligent_data_transform':
+      case 'dataset_join':
+      case 'data_aggregation':
+      case 'pivot_table':
+      case 'format_conversion':
+      case 'dedup_dataset':
+      case 'add_calculated_column':
+      case 'filter_transform': {
+        const { IntelligentDataTransformer } = await import('./intelligent-data-transformer');
+        const transformer = new IntelligentDataTransformer();
+
+        // Map tool name to the TransformationOperation type expected by the transformer
+        const operationMap: Record<string, string> = {
+          'intelligent_data_transform': input.operation || 'transform',
+          'dataset_join': 'join_datasets',
+          'data_aggregation': 'group_by',
+          'pivot_table': 'pivot',
+          'format_conversion': 'format_conversion',
+          'dedup_dataset': 'dedup',
+          'add_calculated_column': 'add_column',
+          'filter_transform': 'filter_rows'
+        };
+
+        const transformResult = await transformer.transform({
+          operation: (operationMap[toolName] || toolName) as any,
+          inputData: input.inputData || input.data || [],
+          parameters: input.parameters || input,
+          outputFormat: input.outputFormat || 'json',
+          optimizationHint: input.optimizationHint || 'balanced',
+          projectId: executionContext.projectId
+        });
+
+        result = {
+          executionId: executionContext.executionId,
+          toolId: toolName,
+          status: transformResult.success ? 'success' : 'error',
+          result: transformResult,
+          metrics: {
+            duration: transformResult.metadata?.duration || 0,
+            resourcesUsed: { cpu: 0.3, memory: transformResult.metadata?.memoryUsed || 0, storage: 0 },
             cost: 0.002
           }
         };
