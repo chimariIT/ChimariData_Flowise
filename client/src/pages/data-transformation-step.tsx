@@ -431,7 +431,8 @@ export default function DataTransformationStep({
         // Only fetch if we have analysis types defined
         const analysisPath = requiredDataElements?.analysisPath ||
             journeyProgress?.requirementsDocument?.analysisPath ||
-            (journeyProgress as any)?.analysisPlans?.metadata?.analysisPath;
+            (journeyProgress as any)?.analysisPlans?.metadata?.analysisPath ||
+            (journeyProgress as any)?.analysisPath;
 
         if (!pid || !analysisPath || analysisPath.length === 0) {
             return;
@@ -1355,12 +1356,54 @@ export default function DataTransformationStep({
         // Also use userQuestions from state as fallback
         const fallbackQuestions = userQuestions.length > 0 ? userQuestions : (requirements.userQuestions || []);
 
+        const schemaColumns = Object.keys(schema || {});
+        const normalizeName = (value: string) => value.toLowerCase().replace(/[_\s-]+/g, '');
+        const resolveToSchemaColumn = (field: string): string | null => {
+            const normalized = normalizeName(field);
+            const exact = schemaColumns.find(col => normalizeName(col) === normalized);
+            if (exact) return exact;
+            return schemaColumns.find(col => normalizeName(col).includes(normalized) || normalized.includes(normalizeName(col))) || null;
+        };
+        const resolveSourceColumns = (element: any): string[] | undefined => {
+            if (Array.isArray(element.sourceColumns) && element.sourceColumns.length > 0) {
+                const sample = element.sourceColumns[0];
+                if (typeof sample === 'string') {
+                    const resolved = element.sourceColumns
+                        .map((field: string) => resolveToSchemaColumn(field))
+                        .filter(Boolean) as string[];
+                    return resolved.length > 0 ? resolved : undefined;
+                }
+                const resolved = element.sourceColumns
+                    .map((sc: any) => sc?.matchedColumn)
+                    .filter(Boolean) as string[];
+                return resolved.length > 0 ? resolved : undefined;
+            }
+
+            const componentFields = element.calculationDefinition?.formula?.componentFields || [];
+            if (componentFields.length > 0) {
+                const resolved = componentFields
+                    .map((field: string) => resolveToSchemaColumn(field))
+                    .filter(Boolean) as string[];
+                return resolved.length > 0 ? resolved : undefined;
+            }
+
+            return undefined;
+        };
+
         // Auto-generate source-to-target mappings with question linkage (Phase 2)
         const mappings: TransformationMapping[] = requirements.requiredDataElements.map((element: any) => {
+            const resolvedSourceColumns = resolveSourceColumns(element);
             // ✅ P0 FIX: Check all possible sources for existing mappings
-            // Priority: sourceField (auto-mapper) > sourceColumn (verification) > mappedColumn > source
-            const mappedSourceColumn = element.sourceField || element.sourceColumn || element.mappedColumn || element.source;
-            const isMapped = element.mappingStatus === 'mapped' || element.sourceAvailable === true || !!mappedSourceColumn;
+            // Priority: sourceField (auto-mapper) > sourceColumn (verification) > resolved component columns > mappedColumn > source
+            const mappedSourceColumn = element.sourceField
+                || element.sourceColumn
+                || resolvedSourceColumns?.[0]
+                || element.mappedColumn
+                || element.source;
+            const isMapped = element.mappingStatus === 'mapped'
+                || element.sourceAvailable === true
+                || !!mappedSourceColumn
+                || (resolvedSourceColumns && resolvedSourceColumns.length > 0);
             
             // Calculate confidence based on:
             // 1. Whether source is available (pre-mapped from data columns in verification step)
@@ -1436,9 +1479,17 @@ export default function DataTransformationStep({
                 if (calcDef.formula?.businessDescription) {
                     suggestedTransformation = calcDef.formula.businessDescription;
                 } else if (calcDef.calculationType === 'aggregated' && calcDef.formula?.aggregationMethod) {
-                    suggestedTransformation = `${calcDef.formula.aggregationMethod} of ${(calcDef.formula.componentFields || []).join(', ')}`;
+                    const componentList = resolvedSourceColumns?.length
+                        ? resolvedSourceColumns
+                        : (calcDef.formula.componentFields || []);
+                    suggestedTransformation = `${calcDef.formula.aggregationMethod} of ${componentList.join(', ')}`;
                 } else if (calcDef.calculationType === 'derived') {
-                    suggestedTransformation = `Derived calculation from source fields`;
+                    const componentList = resolvedSourceColumns?.length
+                        ? resolvedSourceColumns
+                        : (calcDef.formula?.componentFields || []);
+                    suggestedTransformation = componentList.length > 0
+                        ? `Derived from: ${componentList.join(', ')}`
+                        : 'Derived calculation from source fields';
                 }
             }
 
@@ -1481,13 +1532,17 @@ export default function DataTransformationStep({
                 targetType: element.dataType,
                 // ✅ P0 FIX: Use sourceField (auto-mapper) or sourceColumn (verification) as SSOT
                 sourceColumn: resolvedSourceColumn,
+                sourceColumns: resolvedSourceColumns,
                 confidence: confidence / 100, // Normalize to 0-1 for display
                 transformationRequired,
                 suggestedTransformation,
                 userDefinedLogic: '',
                 relatedQuestions: uniqueQuestions, // FIX: Use enhanced question linkage
                 elementId: element.elementId, // Phase 2: Preserve element ID for traceability
-                calculationDefinition: element.calculationDefinition // Preserve for UI display
+                calculationDefinition: element.calculationDefinition, // Preserve for UI display
+                _sourceColumnsDetail: Array.isArray(element.sourceColumns) && element.sourceColumns.length > 0 && typeof element.sourceColumns[0] === 'object'
+                    ? element.sourceColumns
+                    : undefined
             };
         });
 
@@ -2882,7 +2937,7 @@ export default function DataTransformationStep({
                                                             const hasMapping = !!(mapping?.sourceColumn || mapping?.sourceColumns?.length);
 
                                                             return (
-                                                                <TableRow key={idx}>
+                                                                <TableRow key={`${elementId}-${idx}`}>
                                                                     <TableCell className="font-medium text-sm py-2">
                                                                         {elementName}
                                                                     </TableCell>
@@ -3323,7 +3378,7 @@ export default function DataTransformationStep({
                                     </TableHeader>
                                     <TableBody>
                                         {transformationMappings.map((mapping, index) => (
-                                            <TableRow key={index}>
+                                            <TableRow key={mapping.elementId || mapping.targetElement || `mapping-${index}`}>
                                                 <TableCell className="font-medium">{mapping.targetElement}</TableCell>
                                                 <TableCell>
                                                     <Badge variant="outline">{mapping.targetType}</Badge>
@@ -3336,9 +3391,9 @@ export default function DataTransformationStep({
                                                             {(mapping.sourceColumns && mapping.sourceColumns.length > 0
                                                                 ? mapping.sourceColumns
                                                                 : mapping.sourceColumn ? [mapping.sourceColumn] : []
-                                                            ).map((col) => (
+                                                            ).map((col, colIdx) => (
                                                                 <Badge
-                                                                    key={col}
+                                                                    key={`${mapping.elementId || mapping.targetElement || 'mapping'}-${col}-${colIdx}`}
                                                                     variant="secondary"
                                                                     className="text-xs flex items-center gap-1 px-2 py-0.5"
                                                                 >

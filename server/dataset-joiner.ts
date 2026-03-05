@@ -1,7 +1,7 @@
 export interface JoinConfig {
   joinWithProjects: string[];
   joinType: 'inner' | 'left' | 'right' | 'outer';
-  joinKeys: { [projectId: string]: string };
+  joinKeys: { [projectId: string]: string | string[] };
   mergeStrategy: 'merge' | 'concat';
 }
 
@@ -130,8 +130,10 @@ export class DatasetJoiner {
       for (let jpIdx = 0; jpIdx < joinProjects.length; jpIdx++) {
         const joinProject = joinProjects[jpIdx];
         const dsIndex = jpIdx + 2;
+        const joinKey = config.joinKeys[joinProject.id];
+        const joinKeys = Array.isArray(joinKey) ? joinKey : joinKey ? [joinKey] : [];
         Object.entries(joinProject.schema || {}).forEach(([field, info]) => {
-          if (field !== config.joinKeys[joinProject.id]) {
+          if (!joinKeys.includes(field)) {
             const outCol = baseSchemaFields.has(field) ? `${field}_${dsIndex}` : field;
             newSchema[outCol] = {
               ...(info as object),
@@ -195,8 +197,8 @@ export class DatasetJoiner {
   private static performJoin(
     leftData: any[],
     rightData: any[],
-    leftKey: string,
-    rightKey: string,
+    leftKey: string | string[],
+    rightKey: string | string[],
     joinType: 'inner' | 'left' | 'right' | 'outer',
     rightPrefix: string,
     leftColumns?: Set<string>,
@@ -208,17 +210,33 @@ export class DatasetJoiner {
     const leftCols = leftData.length > 0 ? Object.keys(leftData[0]) : [];
     const rightCols = rightData.length > 0 ? Object.keys(rightData[0]) : [];
 
-    const actualLeftKey = leftCols.find(c => c.toLowerCase() === leftKey.toLowerCase()) || leftKey;
-    const actualRightKey = rightCols.find(c => c.toLowerCase() === rightKey.toLowerCase()) || rightKey;
+    const leftKeys = Array.isArray(leftKey) ? leftKey : [leftKey];
+    const rightKeys = Array.isArray(rightKey) ? rightKey : [rightKey];
+    const actualLeftKeys = leftKeys.map((key) => leftCols.find(c => c.toLowerCase() === key.toLowerCase()) || key);
+    const actualRightKeys = rightKeys.map((key) => rightCols.find(c => c.toLowerCase() === key.toLowerCase()) || key);
 
-    console.log(`🔗 [DatasetJoiner] Join keys: left="${actualLeftKey}" (from ${leftKey}), right="${actualRightKey}" (from ${rightKey})`);
+    console.log(`🔗 [DatasetJoiner] Join keys: left="${actualLeftKeys.join(', ')}" (from ${leftKeys.join(', ')}), right="${actualRightKeys.join(', ')}" (from ${rightKeys.join(', ')})`);
     console.log(`🔗 [DatasetJoiner] Left columns: ${leftCols.join(', ')}`);
     console.log(`🔗 [DatasetJoiner] Right columns: ${rightCols.join(', ')}`);
 
     // Create lookup map for right data - use NORMALIZED key values for matching
+    const buildCompositeKey = (row: any, keys: string[]): string | null => {
+      const parts = keys.map((key) => {
+        const value = row?.[key];
+        if (value === null || value === undefined) {
+          return '';
+        }
+        return String(value).toLowerCase().trim();
+      });
+      if (parts.every((part) => part.length === 0)) {
+        return null;
+      }
+      return parts.join('||');
+    };
+
     const rightMap = new Map();
     rightData.forEach(row => {
-      const keyValue = String(row[actualRightKey] ?? '').toLowerCase().trim();
+      const keyValue = buildCompositeKey(row, actualRightKeys);
       if (keyValue && !rightMap.has(keyValue)) {
         rightMap.set(keyValue, []);
       }
@@ -236,8 +254,8 @@ export class DatasetJoiner {
 
     // Process left data - use NORMALIZED key values for lookup
     leftData.forEach(leftRow => {
-      const leftKeyValue = String(leftRow[actualLeftKey] ?? '').toLowerCase().trim();
-      const rightMatches = rightMap.get(leftKeyValue) || [];
+      const leftKeyValue = buildCompositeKey(leftRow, actualLeftKeys);
+      const rightMatches = leftKeyValue ? rightMap.get(leftKeyValue) || [] : [];
 
       if (rightMatches.length > 0) {
         matchCount++;
@@ -248,7 +266,7 @@ export class DatasetJoiner {
 
           // Add right row data — only suffix conflicting column names
           Object.entries(rightRow).forEach(([field, value]) => {
-            if (field.toLowerCase() !== actualRightKey.toLowerCase()) {
+            if (!actualRightKeys.some((key) => key.toLowerCase() === field.toLowerCase())) {
               const outCol = leftColumns && datasetIndex
                 ? this.getJoinedColumnName(field, leftColumns, datasetIndex)
                 : `${rightPrefix}_${field}`;
@@ -266,7 +284,7 @@ export class DatasetJoiner {
 
           // Add null values for right fields
           rightData[0] && Object.keys(rightData[0]).forEach(field => {
-            if (field.toLowerCase() !== actualRightKey.toLowerCase()) {
+            if (!actualRightKeys.some((key) => key.toLowerCase() === field.toLowerCase())) {
               const outCol = leftColumns && datasetIndex
                 ? this.getJoinedColumnName(field, leftColumns, datasetIndex)
                 : `${rightPrefix}_${field}`;
@@ -284,8 +302,8 @@ export class DatasetJoiner {
     // For right and outer joins: add unmatched right rows
     if (joinType === 'right' || joinType === 'outer') {
       rightData.forEach(rightRow => {
-        const rightKeyValue = String(rightRow[actualRightKey] ?? '').toLowerCase().trim();
-        if (!matchedRightKeys.has(rightKeyValue)) {
+        const rightKeyValue = buildCompositeKey(rightRow, actualRightKeys);
+        if (rightKeyValue && !matchedRightKeys.has(rightKeyValue)) {
           const joinedRow: any = {};
 
           // Add null values for left fields
@@ -295,13 +313,13 @@ export class DatasetJoiner {
 
           // Add right row data — only suffix conflicting column names
           Object.entries(rightRow).forEach(([field, value]) => {
-            if (field.toLowerCase() !== actualRightKey.toLowerCase()) {
+            if (!actualRightKeys.some((key) => key.toLowerCase() === field.toLowerCase())) {
               const outCol = leftColumns && datasetIndex
                 ? this.getJoinedColumnName(field, leftColumns, datasetIndex)
                 : `${rightPrefix}_${field}`;
               joinedRow[outCol] = value;
             } else {
-              joinedRow[actualLeftKey] = value; // Use the join key
+              joinedRow[actualLeftKeys[0]] = value; // Use the first join key for placement
             }
           });
 
@@ -322,7 +340,7 @@ export class DatasetJoiner {
     if (config.mergeStrategy === 'merge') {
       for (const projectId of config.joinWithProjects) {
         const joinKey = config.joinKeys[projectId];
-        if (!joinKey) {
+        if (!joinKey || (Array.isArray(joinKey) && joinKey.length === 0)) {
           return `Join key not specified for project ${projectId}`;
         }
         
@@ -331,8 +349,14 @@ export class DatasetJoiner {
           return `Project ${projectId} not found`;
         }
         
-        if (!project.schema || !project.schema[joinKey]) {
-          return `Join key '${joinKey}' not found in project ${project.name}`;
+        if (!project.schema) {
+          return `Join key not found in project ${project.name}`;
+        }
+        const joinKeys = Array.isArray(joinKey) ? joinKey : [joinKey];
+        for (const key of joinKeys) {
+          if (!project.schema[key]) {
+            return `Join key '${key}' not found in project ${project.name}`;
+          }
         }
       }
       

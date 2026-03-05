@@ -530,6 +530,16 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
     }
   };
 
+  const executiveSummaryText =
+    analysisResults?.executiveSummary ||
+    analysisResults?.summary?.executiveSummary ||
+    decisionFramework?.executiveSummary ||
+    "Executive summary will appear after results finalize.";
+
+  const analysisMethods = (analysisResults?.analysisTypes || [])
+    .filter((type: string) => typeof type === 'string' && type.trim().length > 0)
+    .map((type: string) => type.trim());
+
   // LOW PRIORITY FIX: Use robust artifact type mapping instead of fragile string matching
   const ARTIFACT_TYPE_ICONS: Record<string, typeof FileText> = {
     // Document types
@@ -583,6 +593,50 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
       return;
     }
     window.open(artifact.url, '_blank', 'noopener,noreferrer');
+  };
+
+  const resolveArtifactByType = (matches: (type: string) => boolean) => {
+    return artifacts.find((artifact) => matches(String(artifact?.type || '').toUpperCase()));
+  };
+
+  const handleExportDownload = async (format: 'pdf' | 'pptx') => {
+    if (!projectId) {
+      toast({
+        title: "Missing project",
+        description: "Project id is required to export results.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    const targetArtifact = resolveArtifactByType((type) =>
+      format === 'pdf'
+        ? type.includes('PDF')
+        : type.includes('PPT') || type.includes('PRESENTATION')
+    );
+
+    if (targetArtifact?.url) {
+      handleArtifactDownload(targetArtifact);
+      return;
+    }
+
+    try {
+      const blob = await apiClient.exportProject(projectId, format);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `project-${projectId}.${format}`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      toast({
+        title: "Export failed",
+        description: err?.message || `Unable to export ${format.toUpperCase()} report right now.`,
+        variant: "destructive"
+      });
+    }
   };
 
   const getImpactColor = (impact: string) => {
@@ -944,6 +998,95 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
           </CardContent>
         </Card>
       )}
+
+      <div className="space-y-4">
+        <Card className="border-indigo-200 bg-indigo-50">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-indigo-900">
+              <Brain className="w-5 h-5" />
+              Executive Summary
+            </CardTitle>
+            <CardDescription className="text-indigo-700">
+              Key findings distilled for decision-makers
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-indigo-900">{executiveSummaryText}</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <FileText className="w-5 h-5" />
+              Questions Answered
+            </CardTitle>
+            <CardDescription>
+              Data-backed answers for each requested question
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <UserQuestionAnswers project={project} />
+          </CardContent>
+        </Card>
+
+        <Card className="border-emerald-200 bg-emerald-50">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-emerald-900">
+              <CheckCircle className="w-5 h-5" />
+              Data Quality
+            </CardTitle>
+            <CardDescription className="text-emerald-700">
+              Completeness and reliability checks for the analysis dataset
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="text-center">
+                <p className="text-2xl font-bold text-emerald-900">{analysisSummary.dataRowsProcessed.toLocaleString()}</p>
+                <p className="text-sm text-emerald-800">Records Analyzed</p>
+              </div>
+              <div className="text-center">
+                <p className="text-2xl font-bold text-emerald-900">{analysisSummary.datasetCount}</p>
+                <p className="text-sm text-emerald-800">Datasets</p>
+              </div>
+              <div className="text-center">
+                <p className="text-2xl font-bold text-emerald-900">{analysisSummary.qualityScore}%</p>
+                <p className="text-sm text-emerald-800">Quality Score</p>
+              </div>
+              <div className="text-center">
+                <p className="text-2xl font-bold text-emerald-900">{analysisSummary.totalAnalyses}</p>
+                <p className="text-sm text-emerald-800">Checks Applied</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <BarChart3 className="w-5 h-5" />
+              Analysis Methods
+            </CardTitle>
+            <CardDescription>
+              Techniques applied to produce the results
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap gap-2">
+              {analysisMethods.length > 0 ? (
+                analysisMethods.map((method: string) => (
+                  <Badge key={method} variant="secondary" className="bg-blue-50 text-blue-800">
+                    {method.replace(/_/g, ' ')}
+                  </Badge>
+                ))
+              ) : (
+                <span className="text-sm text-gray-600">Methods will appear once results are finalized.</span>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
 
       {/* Audience selector and complexity controls */}
       <Card>
@@ -1541,6 +1684,38 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
               </CardDescription>
             </CardHeader>
             <CardContent>
+              <div className="grid gap-3 sm:grid-cols-2 mb-4">
+                <div className="flex items-center justify-between p-3 border border-gray-200 rounded-lg bg-white">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 rounded-lg bg-red-50 text-red-600">
+                      <FileText className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="font-medium text-gray-900">PDF Report</h4>
+                      <p className="text-sm text-gray-600">Full analysis with Q&A, findings, and visuals</p>
+                    </div>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={() => handleExportDownload('pdf')}>
+                    <Download className="w-4 h-4 mr-2" />
+                    Download PDF
+                  </Button>
+                </div>
+                <div className="flex items-center justify-between p-3 border border-gray-200 rounded-lg bg-white">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 rounded-lg bg-emerald-50 text-emerald-600">
+                      <Image className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="font-medium text-gray-900">Executive Presentation</h4>
+                      <p className="text-sm text-gray-600">PowerPoint deck with key findings and recommendations</p>
+                    </div>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={() => handleExportDownload('pptx')}>
+                    <Download className="w-4 h-4 mr-2" />
+                    Download PPTX
+                  </Button>
+                </div>
+              </div>
               {artifactsLoading ? (
                 <div className="flex items-center gap-2 text-sm text-blue-700">
                   <Loader2 className="w-4 h-4 animate-spin" />
@@ -1708,6 +1883,12 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
                     Export as PDF
                   </DropdownMenuItem>
                 ))}
+                {artifacts.filter(a => a.type?.includes('PDF')).length === 0 && (
+                  <DropdownMenuItem onClick={() => handleExportDownload('pdf')}>
+                    <FileText className="w-4 h-4 mr-2" />
+                    Export as PDF
+                  </DropdownMenuItem>
+                )}
                 {artifacts.filter(a => a.type?.includes('CSV') || a.type?.includes('EXCEL')).map((artifact) => (
                   <DropdownMenuItem key={artifact.id} onClick={() => handleArtifactDownload(artifact)}>
                     <BarChart3 className="w-4 h-4 mr-2" />
@@ -1720,6 +1901,12 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
                     Export as PowerPoint
                   </DropdownMenuItem>
                 ))}
+                {artifacts.filter(a => a.type?.includes('PPT') || a.type?.includes('PRESENTATION')).length === 0 && (
+                  <DropdownMenuItem onClick={() => handleExportDownload('pptx')}>
+                    <Image className="w-4 h-4 mr-2" />
+                    Export as PowerPoint
+                  </DropdownMenuItem>
+                )}
                 {artifacts.length === 0 && (
                   <>
                     <DropdownMenuItem disabled>

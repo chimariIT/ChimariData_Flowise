@@ -2,6 +2,19 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { MessageCircle, CheckCircle2, AlertCircle, Loader2, ChevronDown, ChevronUp, Database, BarChart3, FileText, Shuffle, Lock } from "lucide-react";
+import {
+    ResponsiveContainer,
+    BarChart,
+    Bar,
+    LineChart,
+    Line,
+    ScatterChart,
+    Scatter,
+    XAxis,
+    YAxis,
+    Tooltip,
+    CartesianGrid
+} from "recharts";
 import { useState } from "react";
 
 interface UserQuestionAnswersProps {
@@ -41,6 +54,7 @@ export default function UserQuestionAnswers({ project, className = "", isPaid = 
     // Extract AI-generated Q&A from analysis results (if available)
     const analysisResults = project?.analysisResults;
     const aiGeneratedQA = analysisResults?.questionAnswers;
+    const visualizations = analysisResults?.visualizations || [];
 
     // Fallback: Extract user's original questions from project session
     const businessQuestions = project?.businessQuestions || project?.prepareData?.businessQuestions || "";
@@ -118,6 +132,181 @@ export default function UserQuestionAnswers({ project, className = "", isPaid = 
     };
 
     const questionAnswers = getQuestionAnswers();
+
+    const normalizeVizType = (type: string) => type.toLowerCase();
+
+    const getVisualizationData = (viz: any) => {
+        if (!viz || !viz.data) return null;
+
+        if (Array.isArray(viz.data)) {
+            return viz.data;
+        }
+
+        if (Array.isArray(viz.data.labels) && Array.isArray(viz.data.values)) {
+            return viz.data.labels.map((label: any, index: number) => ({
+                name: String(label),
+                value: Number(viz.data.values[index] ?? 0)
+            }));
+        }
+
+        if (Array.isArray(viz.data.x) && Array.isArray(viz.data.y)) {
+            return viz.data.x.map((xVal: any, index: number) => ({
+                x: Number(xVal),
+                y: Number(viz.data.y[index] ?? 0)
+            }));
+        }
+
+        if (Array.isArray(viz.data.data)) {
+            return viz.data.data;
+        }
+
+        return null;
+    };
+
+    const inferIntentType = (question: string) => {
+        const q = question.toLowerCase();
+        if (q.includes('highest') || q.includes('lowest') || q.includes('top') || q.includes('bottom')) return 'comparison';
+        if (q.includes('trend') || q.includes('over time') || q.includes('change') || q.includes('growth')) return 'trend';
+        if (q.includes('correlation') || q.includes('relationship') || q.includes('affect') || q.includes('impact')) return 'relationship';
+        if (q.includes('distribution') || q.includes('spread') || q.includes('variance')) return 'distribution';
+        if (q.includes('composition') || q.includes('parts') || q.includes('share') || q.includes('portion')) return 'composition';
+        if (q.includes('goal') && (q.includes('actual') || q.includes('target'))) return 'goal_vs_actual';
+        return 'general';
+    };
+
+    const getPreferredChartTypes = (intentType: string) => {
+        switch (intentType) {
+            case 'comparison':
+                return ['bar', 'column', 'bubble', 'packed_bubble'];
+            case 'trend':
+                return ['line', 'area'];
+            case 'relationship':
+                return ['scatter', 'bubble'];
+            case 'distribution':
+                return ['histogram', 'box', 'boxplot'];
+            case 'composition':
+                return ['stacked_bar', 'treemap', 'waterfall'];
+            case 'goal_vs_actual':
+                return ['dumbbell', 'dumbbell_plot'];
+            default:
+                return [];
+        }
+    };
+
+    const getRelatedVisualizations = (qa: QuestionAnswer) => {
+        if (!visualizations || visualizations.length === 0) return [];
+
+        const executedAnalyses = (qa.evidenceChain as any)?.executedAnalyses || [];
+        const analysisIds = executedAnalyses.map((a: any) => a.analysisId).filter(Boolean);
+        const analysisNames = executedAnalyses.map((a: any) => a.analysisName || a.analysisType).filter(Boolean);
+        const analysisTypes = qa.analysisTypes || [];
+
+        let matches = visualizations.filter((viz: any) => {
+            const sourceId = viz?.sourceAnalysisId;
+            const sourceName = String(viz?.sourceAnalysisName || '').toLowerCase();
+            const title = String(viz?.title || '').toLowerCase();
+            const type = String(viz?.type || '').toLowerCase();
+
+            if (analysisIds.length > 0 && sourceId) {
+                return analysisIds.includes(sourceId);
+            }
+
+            if (analysisNames.length > 0) {
+                return analysisNames.some((name: string) =>
+                    sourceName.includes(name.toLowerCase()) || title.includes(name.toLowerCase())
+                );
+            }
+
+            if (analysisTypes.length > 0) {
+                return analysisTypes.some((analysisType: string) => {
+                    const needle = analysisType.toLowerCase();
+                    return sourceName.includes(needle) || title.includes(needle) || type.includes(needle);
+                });
+            }
+
+            return false;
+        });
+
+        const intentType = inferIntentType(qa.question);
+        const preferredTypes = getPreferredChartTypes(intentType);
+
+        if (matches.length > 0 && preferredTypes.length > 0) {
+            const preferred = matches.filter((viz: any) =>
+                preferredTypes.some((preferredType) => String(viz?.type || '').toLowerCase().includes(preferredType))
+            );
+            if (preferred.length > 0) {
+                return preferred.slice(0, 2);
+            }
+        }
+
+        if (matches.length > 0) {
+            return matches.slice(0, 2);
+        }
+
+        if (preferredTypes.length > 0) {
+            const fallbackPreferred = visualizations.filter((viz: any) =>
+                preferredTypes.some((preferredType) => String(viz?.type || '').toLowerCase().includes(preferredType))
+            );
+            if (fallbackPreferred.length > 0) {
+                return fallbackPreferred.slice(0, 2);
+            }
+        }
+
+        return [];
+    };
+
+    const renderVisualization = (viz: any) => {
+        const chartData = getVisualizationData(viz);
+        if (!chartData || chartData.length === 0) return null;
+
+        const chartType = normalizeVizType(viz?.type || 'bar');
+        const usesXY = chartData[0]?.x !== undefined && chartData[0]?.y !== undefined;
+
+        const commonProps = {
+            data: chartData,
+            margin: { top: 8, right: 12, left: 0, bottom: 8 }
+        };
+
+        if (chartType.includes('scatter') || usesXY) {
+            return (
+                <ResponsiveContainer width="100%" height={180}>
+                    <ScatterChart {...commonProps}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis type="number" dataKey="x" />
+                        <YAxis type="number" dataKey="y" />
+                        <Tooltip />
+                        <Scatter data={chartData} fill="#3b82f6" />
+                    </ScatterChart>
+                </ResponsiveContainer>
+            );
+        }
+
+        if (chartType.includes('line') || chartType.includes('trend')) {
+            return (
+                <ResponsiveContainer width="100%" height={180}>
+                    <LineChart {...commonProps}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="name" />
+                        <YAxis />
+                        <Tooltip />
+                        <Line type="monotone" dataKey="value" stroke="#6366f1" strokeWidth={2} dot={{ r: 3 }} />
+                    </LineChart>
+                </ResponsiveContainer>
+            );
+        }
+
+        return (
+            <ResponsiveContainer width="100%" height={180}>
+                <BarChart {...commonProps}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="name" />
+                    <YAxis />
+                    <Tooltip />
+                    <Bar dataKey="value" fill="#10b981" radius={[4, 4, 0, 0]} />
+                </BarChart>
+            </ResponsiveContainer>
+        );
+    };
 
     // If no questions were asked, show the analysis goal with summary
     if (questionAnswers.length === 0 && analysisGoal) {
@@ -257,6 +446,43 @@ export default function UserQuestionAnswers({ project, className = "", isPaid = 
                                     <div className="mt-3 p-4 bg-blue-50 rounded-lg border border-blue-100">
                                         <p className="text-sm font-medium text-blue-900 mb-2">Answer:</p>
                                         <p className="text-gray-800 leading-relaxed">{qa.answer}</p>
+                                    </div>
+
+                                    <div className="mt-4">
+                                        <div className="flex items-center gap-2 mb-2">
+                                            <BarChart3 className="w-4 h-4 text-indigo-600" />
+                                            <span className="text-sm font-medium text-gray-900">Relevant Visualizations</span>
+                                        </div>
+                                        {(() => {
+                                            const relatedVisualizations = getRelatedVisualizations(qa);
+                                            if (relatedVisualizations.length === 0) {
+                                                return (
+                                                    <p className="text-sm text-gray-500">No visualization linked to this answer yet.</p>
+                                                );
+                                            }
+                                            return (
+                                                <div className="grid gap-3 md:grid-cols-2">
+                                                    {relatedVisualizations.map((viz: any, vizIndex: number) => (
+                                                        <div key={`${viz?.id || vizIndex}`} className="border border-gray-200 rounded-lg p-3 bg-white">
+                                                            <div className="flex items-center justify-between mb-2">
+                                                                <div>
+                                                                    <p className="text-sm font-medium text-gray-900">{viz?.title || 'Chart'}</p>
+                                                                    {viz?.description && (
+                                                                        <p className="text-xs text-gray-500">{viz.description}</p>
+                                                                    )}
+                                                                </div>
+                                                                <Badge variant="secondary" className="bg-indigo-50 text-indigo-700">
+                                                                    {String(viz?.type || 'chart')}
+                                                                </Badge>
+                                                            </div>
+                                                            {renderVisualization(viz) || (
+                                                                <p className="text-sm text-gray-500">Visualization data not available.</p>
+                                                            )}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            );
+                                        })()}
                                     </div>
                                     <div className="mt-3 flex items-center gap-3 flex-wrap">
                                         {getConfidenceBadge(qa.confidence)}

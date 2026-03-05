@@ -13,9 +13,8 @@
  */
 
 import { Router } from 'express';
-import { nanoid } from 'nanoid';
 import { db } from '../db';
-import { projectSessions, projectQuestions } from '@shared/schema';
+import { projectSessions } from '@shared/schema';
 import { eq, and, desc, lt } from 'drizzle-orm';
 import { ensureAuthenticated } from './auth';
 import crypto from 'crypto';
@@ -25,12 +24,12 @@ type SessionJourneyType = 'non-tech' | 'business' | 'technical' | 'consultation'
 const JOURNEY_TYPE_NORMALIZATION: Record<string, SessionJourneyType> = {
   'non-tech': 'non-tech',
   'non_tech': 'non-tech',
-  'ai_guided': 'non-tech',  // Legacy mapping - deprecated
+  'ai_guided': 'non-tech',
   guided: 'non-tech',
   business: 'business',
-  'template_based': 'business',  // Legacy mapping - deprecated
+  'template_based': 'business',
   technical: 'technical',
-  'self_service': 'technical',  // Legacy mapping - deprecated
+  'self_service': 'technical',
   consultation: 'consultation',
   custom: 'custom',
 };
@@ -62,10 +61,7 @@ function generateDataHash(data: any): string {
  * Uses AES-256-GCM for authenticated encryption
  */
 function encryptSessionData(data: any): string {
-  const ENCRYPTION_KEY = process.env.SESSION_ENCRYPTION_KEY || process.env.JWT_SECRET || (() => {
-      console.error('⛔ CRITICAL: No SESSION_ENCRYPTION_KEY or JWT_SECRET set. Using ephemeral key - sessions will not survive restart.');
-      return crypto.randomBytes(32).toString('hex');
-    })();
+  const ENCRYPTION_KEY = process.env.SESSION_ENCRYPTION_KEY || process.env.JWT_SECRET || 'fallback-key-change-in-production';
 
   // Derive a 32-byte key from the secret
   const key = crypto.createHash('sha256').update(ENCRYPTION_KEY).digest();
@@ -93,10 +89,7 @@ function encryptSessionData(data: any): string {
  */
 function decryptSessionData(encryptedData: string): any {
   try {
-    const ENCRYPTION_KEY = process.env.SESSION_ENCRYPTION_KEY || process.env.JWT_SECRET || (() => {
-      console.error('⛔ CRITICAL: No SESSION_ENCRYPTION_KEY or JWT_SECRET set. Using ephemeral key - sessions will not survive restart.');
-      return crypto.randomBytes(32).toString('hex');
-    })();
+    const ENCRYPTION_KEY = process.env.SESSION_ENCRYPTION_KEY || process.env.JWT_SECRET || 'fallback-key-change-in-production';
 
     // Derive the same 32-byte key
     const key = crypto.createHash('sha256').update(ENCRYPTION_KEY).digest();
@@ -173,7 +166,7 @@ router.get('/current', ensureAuthenticated, async (req, res) => {
     }
 
     // Create new session
-    const sessionId = `ps_${nanoid()}`;
+    const sessionId = `ps_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + SESSION_EXPIRY_DAYS);
 
@@ -301,12 +294,8 @@ router.post('/:sessionId/update-step', ensureAuthenticated, async (req, res) => 
 
             for (let idx = 0; idx < questionsText.length; idx++) {
               const questionText = questionsText[idx];
-              // Generate stable question ID using hash (matches question-answer-service.ts format)
-              const questionHash = crypto.createHash('sha256')
-                .update(questionText.toLowerCase().trim())
-                .digest('hex')
-                .substring(0, 8);
-              const questionId = `q_${projectId.substring(0, 8)}_${questionHash}`;
+              // Generate stable question ID from project and question text
+              const questionId = `q_${projectId.slice(0, 8)}_${idx + 1}`;
 
               try {
                 // Upsert: check if exists first

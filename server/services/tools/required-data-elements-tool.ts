@@ -16,10 +16,251 @@ import { normalizeQuestions } from '../../utils/question-normalizer';
 import { generateStableQuestionId } from '../../constants';
 import { chimaridataAI } from '../../chimaridata-ai';
 import { sourceColumnMapper } from '../source-column-mapper';
+import { embeddingService, type EmbeddingResult } from '../embedding-service';
+import { businessDefinitionRegistry } from '../business-definition-registry';
 
 /**
  * Required data element specification
  */
+
+// ============================================================
+// PHASE 1: SEMANTIC MATCHING UTILITIES
+// ============================================================
+
+/**
+ * Calculate cosine similarity between two embedding vectors
+ */
+function cosineSimilarity(vec1: number[], vec2: number[]): number {
+    if (!vec1 || !vec2 || vec1.length !== vec2.length || vec1.length === 0) {
+        return 0;
+    }
+
+    let dotProduct = 0;
+    let norm1 = 0;
+    let norm2 = 0;
+
+    for (let i = 0; i < vec1.length; i++) {
+        dotProduct += vec1[i] * vec2[i];
+        norm1 += vec1[i] * vec1[i];
+        norm2 += vec2[i] * vec2[i];
+    }
+
+    if (norm1 === 0 || norm2 === 0) return 0;
+
+    return dotProduct / (Math.sqrt(norm1) * Math.sqrt(norm2));
+}
+
+/**
+ * Normalize text for comparison (lowercase, trim, remove extra spaces)
+ */
+function normalizeForMatching(text: string): string {
+    return text.toLowerCase()
+        .trim()
+        .replace(/\s+/g, ' ')
+        .replace(/[?!.;:]+$/g, '');
+}
+
+/**
+ * Extract keywords from text (filter out common stop words)
+ */
+function extractMatchingKeywords(text: string): string[] {
+    const stopWords = new Set([
+        'about', 'which', 'there', 'their', 'would', 'could', 'should',
+        'these', 'those', 'between', 'before', 'after', 'what', 'how',
+        'why', 'when', 'where', 'who', 'the', 'a', 'an', 'is', 'are',
+        'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had',
+        'do', 'does', 'did', 'will', 'would', 'should', 'can', 'could',
+        'may', 'might', 'must', 'shall', 'for', 'to', 'of', 'in', 'on',
+        'at', 'by', 'from', 'with', 'and', 'or', 'but', 'not'
+    ]);
+
+    return normalizeForMatching(text)
+        .split(/\s+/)
+        .filter(w => w.length > 3 && !stopWords.has(w));
+}
+
+/**
+ * Phase 1 Enhanced: Score how well an element matches a question using multiple strategies
+ *
+ * Scoring layers (highest to lowest priority):
+ * 1. Direct question ID match (score: 1.0)
+ * 2. Semantic similarity via embeddings (score: 0.7-0.95)
+ * 3. Business definition synonyms/industry terms (score: 0.75)
+ * 4. Keyword overlap (score: 0.4-0.6)
+ * 5. Pattern/substring matching (score: 0.3-0.4)
+ */
+async function scoreElementMatchPhase1(
+    question: string,
+    questionId: string,
+    element: RequiredDataElement,
+    questionEmbedding: EmbeddingResult | null,
+    businessContextMap: Map<string, any>,
+    industryContext?: string
+): Promise<{
+    element: RequiredDataElement;
+    score: number;
+    matchReasons: string[];
+    matchLayer: 'exact' | 'semantic' | 'business' | 'keyword' | 'pattern' | 'none';
+}> {
+    const reasons: string[] = [];
+    let score = 0;
+    const elementName = element.elementName;
+    const elementDescription = element.description || '';
+    const questionLower = normalizeForMatching(question);
+    const elementNameLower = normalizeForMatching(elementName);
+
+    console.log(`      [Phase 1 Scoring] Question: "${question.substring(0, 50)}..." vs Element: "${elementName}"`);
+
+    // ============================================================
+    // LAYER 1: Direct Question ID Match (highest score)
+    // ============================================================
+    const elementQuestionIds = element.questionIds || [];
+    if (elementQuestionIds.includes(questionId)) {
+        return {
+            element,
+            score: 1.0,
+            matchReasons: ['Direct question ID match'],
+            matchLayer: 'exact'
+        };
+    }
+
+    // ============================================================
+    // LAYER 2: Semantic Similarity via Embeddings
+    // ============================================================
+    if (questionEmbedding && questionEmbedding.embedding && questionEmbedding.embedding.length > 0) {
+        let elementEmbedding: number[] | null = null;
+
+        // Try to get element embedding from description or name
+        const textToEmbed = elementDescription || elementName;
+        if (textToEmbed) {
+            try {
+                const result = await embeddingService.embedText(textToEmbed, { truncateLength: 500 });
+                elementEmbedding = result.embedding;
+            } catch (embedErr) {
+                // Fallback: use keyword-based scoring if embedding fails
+                console.warn(`      ⚠️ Embedding failed for element "${elementName}":`, embedErr);
+            }
+        }
+
+        if (elementEmbedding && elementEmbedding.length > 0) {
+            const similarity = cosineSimilarity(questionEmbedding.embedding, elementEmbedding);
+            if (similarity > 0.65) {  // Threshold for semantic match
+                const semanticScore = similarity;
+                score = Math.max(score, semanticScore);
+                reasons.push(`Semantic similarity: ${(similarity * 100).toFixed(0)}%`);
+                console.log(`      ✓ Layer 2: Semantic similarity ${(similarity * 100).toFixed(0)}% (score=${semanticScore})`);
+                return {
+                    element,
+                    score,
+                    matchReasons: reasons,
+                    matchLayer: 'semantic'
+                };
+            }
+        }
+    }
+
+    // ============================================================
+    // LAYER 3: Business Definition Lookup (synonyms, industry terms)
+    // ============================================================
+    if (businessContextMap.has(elementName)) {
+        const bizDef = businessContextMap.get(elementName);
+        const bizScore = bizDef ? 0.75 : 0;
+
+        // Check for synonyms
+        if (bizDef?.synonyms && bizDef.synonyms.length > 0) {
+            const hasSynonymMatch = bizDef.synonyms.some((syn: string) => {
+                const synLower = syn.toLowerCase();
+                return questionLower.includes(synLower) || synLower.includes(questionLower.substring(0, 20));
+            });
+
+            if (hasSynonymMatch) {
+                score = Math.max(score, bizScore);
+                reasons.push(`Business synonym match (${bizDef.synonyms.slice(0, 2).join(', ')})`);
+                console.log(`      ✓ Layer 3: Business synonym match (score=${bizScore})`);
+            }
+        }
+
+        // Check for industry-specific terms
+        if (bizDef?.industryTerms && bizDef.industryTerms.length > 0) {
+            const hasIndustryMatch = bizDef.industryTerms.some((term: string) => {
+                const termLower = term.toLowerCase();
+                return questionLower.includes(termLower);
+            });
+
+            if (hasIndustryMatch) {
+                score = Math.max(score, bizScore * 0.9); // Slightly lower than synonym
+                reasons.push(`Industry term match (${bizDef.industryTerms[0]})`);
+                console.log(`      ✓ Layer 3: Industry term match (score=${bizScore * 0.9})`);
+                return {
+                    element,
+                    score,
+                    matchReasons: reasons,
+                    matchLayer: 'business'
+                };
+            }
+        }
+    }
+
+    // ============================================================
+    // LAYER 4: Keyword Overlap (more robust than substring)
+    // ============================================================
+    const questionKeywords = extractMatchingKeywords(question);
+    const elementKeywords = extractMatchingKeywords(`${elementName} ${elementDescription}`);
+
+    if (questionKeywords.length > 0 && elementKeywords.length > 0) {
+        const commonKeywords = questionKeywords.filter(kw => elementKeywords.some(ekw =>
+            ekw.includes(kw) || kw.includes(ekw)
+        ));
+
+        if (commonKeywords.length > 0) {
+            const keywordRatio = commonKeywords.length / Math.max(questionKeywords.length, 1);
+            const keywordScore = Math.min(0.6, 0.3 + keywordRatio * 0.5); // Max 0.6
+
+            if (keywordRatio >= 0.25) {  // At least 25% keyword overlap
+                score = Math.max(score, keywordScore);
+                reasons.push(`Keyword overlap: ${commonKeywords.length}/${questionKeywords.length}`);
+                console.log(`      ✓ Layer 4: Keyword overlap ${commonKeywords.length}/${questionKeywords.length} (score=${keywordScore})`);
+            }
+        }
+    }
+
+    // ============================================================
+    // LAYER 5: Pattern/Substring Matching (original fallback)
+    // ============================================================
+    const elementQuestionTexts = element.relatedQuestions || [];
+    const textMatch = elementQuestionTexts.some((qt: string) =>
+        normalizeForMatching(qt).includes(questionLower.substring(0, 30))
+    );
+
+    const nameMatches = questionLower.includes(elementNameLower) ||
+                      elementNameLower.includes(questionLower.substring(0, 20));
+
+    if ((textMatch || nameMatches) && score < 0.4) {
+        const patternScore = 0.35;
+        score = Math.max(score, patternScore);
+        const matchType = textMatch ? 'related question' : nameMatches ? 'element name' : 'partial';
+        reasons.push(`${matchType} pattern match`);
+        console.log(`      ✓ Layer 5: ${matchType} pattern match (score=${patternScore})`);
+    }
+
+    // ============================================================
+    // SCORE THRESHOLDING
+    // ============================================================
+    const MIN_SCORE_THRESHOLD = 0.4; // Elements below this score are not considered related
+
+    if (score < MIN_SCORE_THRESHOLD && reasons.length === 0) {
+        console.log(`      ✗ No match (score=${score} < threshold ${MIN_SCORE_THRESHOLD})`);
+    } else {
+        console.log(`      ✓ Final score: ${score.toFixed(2)} (threshold: ${MIN_SCORE_THRESHOLD})`);
+    }
+
+    return {
+        element,
+        score: score < MIN_SCORE_THRESHOLD ? 0 : score, // Zero out if below threshold
+        matchReasons: reasons.length > 0 ? reasons : ['Below threshold'],
+        matchLayer: score >= 1 ? 'exact' : score >= 0.7 ? 'semantic' : score >= 0.75 ? 'business' : score >= 0.4 ? 'keyword' : score > 0 ? 'pattern' : 'none'
+    };
+}
 export interface RequiredDataElement {
     elementId: string;
     elementName: string;
@@ -32,6 +273,10 @@ export interface RequiredDataElement {
     // Question linkage (CRITICAL for traceability)
     relatedQuestions: string[]; // The business questions this element helps answer
     questionIds?: string[]; // Optional: IDs of related questions for tracking
+
+    // Phase 1: Semantic match metadata for enhanced traceability
+    semanticMatchScore?: number; // 0-1 score from semantic matching
+    semanticMatchReasons?: string[]; // Array of reasons why this element matched
 
     // Hierarchical decomposition (Fix 1A)
     parentElementId?: string;   // If this is a sub-element, ID of the parent composite element
@@ -164,6 +409,16 @@ export interface DataRequirementsMappingDocument {
     status: 'draft' | 'data_scientist_complete' | 'data_engineer_complete' | 'validated' | 'approved';
     createdAt: Date;
     updatedAt: Date;
+
+    // Phase 1: Semantic matching metadata for debugging
+    mappingMetadata?: {
+        buildMethod: 'string_based' | 'semantic_phase1';
+        avgMatchScore?: number;  // Average semantic score (0-1)
+        totalQuestions: number;
+        questionsWithMatches: number;
+        questionsWithoutMatches: number;
+        embeddingCacheHits?: number;
+    };
 
     // Input context
     userGoals: string[];
@@ -298,11 +553,18 @@ export class RequiredDataElementsTool {
         }
 
         // Use Data Scientist Agent to properly infer analysis types and required data elements
-        const analysisPath = await this.inferAnalysisPathWithDataScientist(
-            normalizedGoals,
-            normalizedQuestions,
-            input.datasetMetadata
-        );
+        // Fall back to heuristic analysis path if the DS agent fails to respond.
+        let analysisPath: AnalysisPath[] = [];
+        try {
+            analysisPath = await this.inferAnalysisPathWithDataScientist(
+                normalizedGoals,
+                normalizedQuestions,
+                input.datasetMetadata
+            );
+        } catch (error) {
+            console.warn('⚠️ [Data Elements Tool] DS analysis inference failed, using heuristic fallback:', error);
+            analysisPath = this.inferAnalysisPath(normalizedGoals, normalizedQuestions);
+        }
 
         // FIX: Resolve industry using pipeline context priority chain
         // Priority: PM-resolved (from journeyProgress) > data signals > explicit param > general
@@ -425,6 +687,8 @@ export class RequiredDataElementsTool {
                                     definitionConfidence: lookupResult.confidence,
                                     notes: `DS-grounded + registry-validated (${Math.round(groundingAccuracy * 100)}% fields verified): ${lookupResult.source}`
                                 };
+                                // FIX: Store businessDefinition on element for extractOperationalFields to access
+                                (element as any).businessDefinition = def;
                                 validatedCount++;
                                 console.log(`   ✅ Validated grounding: "${element.elementName}" (${validGroundedFields.length}/${groundedFields.length} fields confirmed in schema)`);
                             } else {
@@ -433,12 +697,20 @@ export class RequiredDataElementsTool {
                                     calculationType: (def.calculationType as any) || 'derived',
                                     formula: {
                                         businessDescription: def.businessDescription || '',
-                                        componentFields: (def.componentFields as string[]) || [],
+                                        // FIX: Preserve full business definition with componentFieldDescriptors metadata
+                                        // This ensures transformation compiler has access to rich descriptor information
+                                        componentFieldDescriptors: def.componentFieldDescriptors || [],
+                                        calculationDefinition: {
+                                            ...element.calculationDefinition,
+                                            componentFieldDescriptors: def.componentFieldDescriptors
+                                        },
                                         aggregationMethod: ((def.aggregationMethod || 'custom') as any)
                                     },
                                     definitionConfidence: lookupResult.confidence,
                                     notes: `Registry override (DS grounding had ${Math.round(groundingAccuracy * 100)}% accuracy): ${lookupResult.source}`
                                 };
+                                // FIX: Store businessDefinition on element for extractOperationalFields to access
+                                (element as any).businessDefinition = def;
                                 delete (element as any).groundedFromDefinition;
                                 enrichedCount++;
                                 console.log(`   🔄 Corrected: "${element.elementName}" — DS grounding inaccurate (${validGroundedFields.length}/${groundedFields.length} valid), using registry definition`);
@@ -450,11 +722,15 @@ export class RequiredDataElementsTool {
                                 formula: {
                                     businessDescription: def.businessDescription || '',
                                     componentFields: (def.componentFields as string[]) || [],
+                                    // FIX: Preserve componentFieldDescriptors for extractOperationalFields
+                                    componentFieldDescriptors: def.componentFieldDescriptors || [],
                                     aggregationMethod: ((def.aggregationMethod || 'custom') as any)
                                 },
                                 definitionConfidence: lookupResult.confidence,
                                 notes: `From registry: ${lookupResult.source} (${Math.round(lookupResult.confidence * 100)}% confidence)`
                             };
+                            // FIX: Store businessDefinition on element for extractOperationalFields to access
+                            (element as any).businessDefinition = def;
                             enrichedCount++;
                             console.log(`   ✅ Enriched: "${element.elementName}" with ${def.calculationType} definition (${lookupResult.source})`);
                         }
@@ -520,22 +796,27 @@ export class RequiredDataElementsTool {
 
         // Entity extraction: Decompose formula fields into operational data fields
         // e.g. "Number of Employees Who Left" → needs employee_id, termination_date, employment_status
+        const schema = input.datasetMetadata?.schema || {};
         for (const element of requiredDataElements) {
             const formula = element.calculationDefinition?.formula;
             const componentFields = formula?.componentFields;
+            const bizDef = (element as any)?.businessDefinition;
             if (componentFields && componentFields.length > 0) {
                 const expandedFields = this.extractOperationalFields(
                     formula.businessDescription || '',
                     componentFields,
-                    element.elementName
+                    element.elementName,
+                    bizDef,
+                    schema
                 );
                 if (expandedFields.length > 0) {
                     (formula as any).operationalFields = expandedFields;
                     // Also set as sourceColumn hint for the transformation step
                     if (!element.sourceColumn) {
-                        element.sourceColumn = expandedFields.map((f: { fieldName: string }) => f.fieldName).join(', ');
+                        const fieldNames = expandedFields.map((f: any) => f.fieldName || f);
+                        element.sourceColumn = fieldNames.join(', ');
                     }
-                    console.log(`   🔬 Entity extraction for "${element.elementName}": ${expandedFields.map((f: { fieldName: string }) => f.fieldName).join(', ')}`);
+                    console.log(`   Entity extraction for "${element.elementName}": ${expandedFields.map((f: any) => f.fieldName || f).join(', ')}`);
                 }
             }
         }
@@ -665,7 +946,7 @@ export class RequiredDataElementsTool {
 
         // Generate question-to-answer mapping (Phase 1 enhancement)
         // Pass projectId to generate stable question IDs matching those in project_questions table
-        const questionAnswerMapping = this.generateQuestionAnswerMapping(
+        const questionAnswerMapping = await this.generateQuestionAnswerMapping(
             normalizedQuestions,
             analysisPath,
             requiredDataElements,
@@ -3630,12 +3911,12 @@ assert df['${element.sourceField}'].nunique() == len(df), "Field must have uniqu
      * Maps each user question to required data elements, analyses, and transformations
      * Uses stable question IDs that match those stored in project_questions table
      */
-    private generateQuestionAnswerMapping(
+    private async generateQuestionAnswerMapping(
         userQuestions: string[],
         analysisPath: AnalysisPath[],
         requiredDataElements: RequiredDataElement[],
         projectId?: string
-    ): Array<{
+    ): Promise<Array<{
         questionId: string;
         questionText: string;
         requiredDataElements: string[];
@@ -3645,8 +3926,62 @@ assert df['${element.sourceField}'].nunique() == len(df), "Field must have uniqu
             artifactType: 'visualization' | 'model' | 'report' | 'dashboard' | 'metric';
             description: string;
         }>;
-    }> {
+    }>> {
         const mapping: Array<any> = [];
+
+        // Phase 1: Generate question embeddings in batch for semantic matching
+        console.log('🔗 [Phase 1] Generating question embeddings for semantic matching...');
+        const questionEmbeddings = new Map<string, EmbeddingResult>();
+
+        try {
+            // Batch embed questions (limit to 10 at a time to avoid rate limits)
+            const batchSize = 10;
+            for (let i = 0; i < userQuestions.length; i += batchSize) {
+                const batch = userQuestions.slice(i, i + batchSize);
+                const results = await Promise.all(batch.map(q =>
+                    embeddingService.embedText(q, { truncateLength: 500 }).catch(err => {
+                        console.warn(`   ⚠️ Failed to embed question: ${q.substring(0, 30)}...`, err);
+                        return null;
+                    })
+                ));
+
+                for (let j = 0; j < batch.length; j++) {
+                    if (results[j]) {
+                        questionEmbeddings.set(batch[j], results[j]!);
+                    }
+                }
+            }
+            console.log(`✅ [Phase 1] Generated ${questionEmbeddings.size} question embeddings`);
+        } catch (embedErr) {
+            console.warn(`⚠️ [Phase 1] Question embedding generation failed:`, embedErr);
+            // Continue without embeddings - will use fallback scoring
+        }
+
+        // Phase 1: Load business definitions for synonym/industry matching
+        console.log('🏭 [Phase 1] Loading business definitions for semantic matching...');
+        const businessContextMap = new Map<string, any>();
+        try {
+            for (const el of requiredDataElements) {
+                if (!el.elementName) continue;
+
+                const lookupResult = await businessDefinitionRegistry.lookupDefinition(
+                    el.elementName,
+                    {
+                        conceptName: el.elementName,
+                        industry: industryContext || 'general',
+                        includeGlobal: true
+                    }
+                );
+
+                if (lookupResult.found && lookupResult.definition) {
+                    businessContextMap.set(el.elementName, lookupResult.definition);
+                }
+            }
+            console.log(`✅ [Phase 1] Loaded ${businessContextMap.size} business definitions`);
+        } catch (bizErr) {
+            console.warn(`⚠️ [Phase 1] Business definition loading failed:`, bizErr);
+            // Continue without business context
+        }
 
         for (let idx = 0; idx < userQuestions.length; idx++) {
             const question = userQuestions[idx];
@@ -3656,13 +3991,42 @@ assert df['${element.sourceField}'].nunique() == len(df), "Field must have uniqu
                 ? generateStableQuestionId(projectId, question)
                 : `q_txt_${crypto.createHash('sha256').update(question.toLowerCase().trim()).digest('hex').substring(0, 8)}`;
 
-            // Find data elements related to this question
-            const relatedElements = requiredDataElements.filter(el =>
-                el.relatedQuestions && el.relatedQuestions.some(q =>
-                    q.toLowerCase().includes(question.toLowerCase().slice(0, 20)) ||
-                    question.toLowerCase().includes(q.toLowerCase().slice(0, 20))
-                )
+            // Phase 1: Enhanced element matching with semantic scoring
+            console.log(`\n   [Phase 1] Scoring elements for question: "${question.substring(0, 60)}..."`);
+            const questionEmbedding = questionEmbeddings.get(question) || null;
+
+            const elementScores = await Promise.all(
+                requiredDataElements.map(async el => {
+                    const scored = await scoreElementMatchPhase1(
+                        question,
+                        questionId,
+                        el,
+                        questionEmbedding,
+                        businessContextMap,
+                        industryContext
+                    );
+                    return scored;
+                })
             );
+
+            // Sort by score (highest first), filter by threshold
+            const MIN_ELEMENT_SCORE = 0.4; // Phase 1: Lower threshold for semantic matching
+            const relatedElements = elementScores
+                .filter(s => s.score >= MIN_ELEMENT_SCORE)
+                .sort((a, b) => b.score - a.score);
+
+            if (relatedElements.length === 0) {
+                console.warn(`⚠️ [Phase 1] No elements above threshold for question: "${question}"`);
+                continue;
+            }
+
+            // Log top match details
+            const topMatch = relatedElements[0];
+            console.log(`   ✓ Found ${relatedElements.length} related elements`);
+            console.log(`   ✓ Top match: "${topMatch.element.elementName || topMatch.element.name}" (score=${topMatch.score.toFixed(2)}, layer=${topMatch.matchLayer})`);
+            if (topMatch.matchReasons.length > 0) {
+                console.log(`   ✓ Match reasons: ${topMatch.matchReasons.join(', ')}`);
+            }
 
             // Find analyses that can answer this question
             const relatedAnalyses = analysisPath.filter(analysis => {
@@ -3824,62 +4188,149 @@ assert df['${element.sourceField}'].nunique() == len(df), "Field must have uniqu
     private extractOperationalFields(
         description: string,
         componentFields: string[],
-        elementName: string
-    ): Array<{ fieldName: string; reason: string }> {
-        const fields: Array<{ fieldName: string; reason: string }> = [];
+        elementName: string,
+        // NEW: Pass business definition context for proper decomposition
+        businessDefinition?: any,
+        datasetSchema?: Record<string, any>
+    ): Array<{ fieldName: string; reason: string; abstractName: string; matchMethod: string }> {
+        const fields: Array<{ fieldName: string; reason: string; abstractName: string; matchMethod: string }> = [];
+
+        // ============================================================
+        // PHASE 1: Use componentFieldDescriptors if available
+        // ============================================================
+        // This is the NEW decomposition logic that actually uses
+        // the rich business definition information to match to real columns
+        if (businessDefinition?.componentFieldDescriptors && Array.isArray(businessDefinition.componentFieldDescriptors)) {
+            console.log(`   [Decomposition] Using ${businessDefinition.componentFieldDescriptors.length} componentFieldDescriptors from business definition for "${elementName}"`);
+
+            for (const descriptor of businessDefinition.componentFieldDescriptors) {
+                const abstractName = descriptor.abstractName;
+                const semanticMeaning = descriptor.semanticMeaning || '';
+                const columnMatchPatterns = descriptor.columnMatchPatterns || [];
+                const columnMatchType = descriptor.columnMatchType || 'direct_value';
+
+                console.log(`      Decomposing: ${abstractName} (${columnMatchType}) - ${semanticMeaning.substring(0, 60)}...`);
+
+                // Find actual columns matching the patterns
+                if (datasetSchema && columnMatchPatterns.length > 0) {
+                    const schemaColumns = Object.keys(datasetSchema);
+                    const matchedColumns: string[] = [];
+
+                    for (const pattern of columnMatchPatterns) {
+                        try {
+                            const regex = new RegExp(pattern, 'i');
+                            for (const col of schemaColumns) {
+                                if (regex.test(col) && !matchedColumns.includes(col)) {
+                                    matchedColumns.push(col);
+                                }
+                            }
+                        } catch (e) {
+                            // Invalid regex - treat as literal string match
+                            const patternLower = pattern.toLowerCase();
+                            for (const col of schemaColumns) {
+                                const colLower = col.toLowerCase();
+                                if (colLower.includes(patternLower) && !matchedColumns.includes(col)) {
+                                    matchedColumns.push(col);
+                                }
+                            }
+                        }
+                    }
+
+                    if (matchedColumns.length > 0) {
+                        // Found actual columns - add them with mapping details
+                        for (const matchedCol of matchedColumns) {
+                            const matchMethod = this.getMatchMethodDescription(columnMatchType, matchedCol, pattern);
+                            fields.push({
+                                fieldName: matchedCol,
+                                reason: semanticMeaning + '. Matched via ' + columnMatchType + ': ' + matchedCol,
+                                abstractName,
+                                matchMethod
+                            });
+                        }
+                        console.log(`         Mapped ${abstractName} -> [${matchedColumns.join(', ')}] (${columnMatchType})`);
+                    } else {
+                        // No columns found - add abstract name with warning
+                        console.warn(`         No columns found for ${abstractName} (patterns: [${columnMatchPatterns.join(', ')}])`);
+                        fields.push({
+                            fieldName: abstractName,
+                            reason: semanticMeaning + '. No matching columns found - needs data source.',
+                            abstractName,
+                            matchMethod: 'no_match'
+                        });
+                    }
+                } else {
+                    // No schema available - use abstract names
+                    fields.push({
+                        fieldName: abstractName,
+                        reason: semanticMeaning,
+                        abstractName,
+                        matchMethod: 'abstract_fallback'
+                    });
+                }
+            }
+
+            return fields;
+        }
+
+        // ============================================================
+        // PHASE 2: Fallback to hard-coded entity extraction
+        // Only used if no componentFieldDescriptors available
+        // ============================================================
         const descLower = (description + ' ' + elementName + ' ' + componentFields.join(' ')).toLowerCase();
+
+        console.log(`   [Decomposition] No componentFieldDescriptors available - using fallback entity extraction for "${elementName}"`);
 
         // Employee-related entities
         if (descLower.includes('employee') || descLower.includes('staff') || descLower.includes('worker') || descLower.includes('headcount')) {
-            fields.push({ fieldName: 'employee_id', reason: 'Unique identifier for each employee' });
+            fields.push({ fieldName: 'employee_id', reason: 'Unique identifier for each employee', abstractName: 'employee_id', matchMethod: 'fallback_keyword' });
         }
         // Leaving/termination entities
         if (descLower.includes('left') || descLower.includes('termin') || descLower.includes('resign') || descLower.includes('turnover') || descLower.includes('attrition') || descLower.includes('separation')) {
-            fields.push({ fieldName: 'termination_date', reason: 'Date employee left the organization' });
-            fields.push({ fieldName: 'employment_status', reason: 'Current status (active/terminated/resigned)' });
+            fields.push({ fieldName: 'termination_date', reason: 'Date employee left of organization', abstractName: 'termination_date', matchMethod: 'fallback_keyword' });
+            fields.push({ fieldName: 'employment_status', reason: 'Current status (active/terminated/resigned)', abstractName: 'employment_status', matchMethod: 'fallback_keyword' });
         }
         // Period/time entities
         if (descLower.includes('period') || descLower.includes('during') || descLower.includes('over time') || descLower.includes('quarterly') || descLower.includes('monthly')) {
-            fields.push({ fieldName: 'date', reason: 'Date field to define the analysis period' });
+            fields.push({ fieldName: 'date', reason: 'Date field to define the analysis period', abstractName: 'date', matchMethod: 'fallback_keyword' });
         }
         // Hiring entities
         if (descLower.includes('hire') || descLower.includes('join') || descLower.includes('onboard') || descLower.includes('new employee')) {
-            fields.push({ fieldName: 'hire_date', reason: 'Date employee joined the organization' });
+            fields.push({ fieldName: 'hire_date', reason: 'Date employee joined of organization', abstractName: 'hire_date', matchMethod: 'fallback_keyword' });
         }
         // Revenue/financial entities
         if (descLower.includes('revenue') || descLower.includes('sales') || descLower.includes('income') || descLower.includes('profit')) {
-            fields.push({ fieldName: 'amount', reason: 'Monetary value (revenue/sales amount)' });
-            fields.push({ fieldName: 'transaction_date', reason: 'Date of the transaction' });
+            fields.push({ fieldName: 'amount', reason: 'Monetary value (revenue/sales amount)', abstractName: 'amount', matchMethod: 'fallback_keyword' });
+            fields.push({ fieldName: 'transaction_date', reason: 'Date of the transaction', abstractName: 'transaction_date', matchMethod: 'fallback_keyword' });
         }
         // Cost/expense entities
         if (descLower.includes('cost') || descLower.includes('expense') || descLower.includes('spend') || descLower.includes('budget')) {
-            fields.push({ fieldName: 'cost_amount', reason: 'Cost or expense value' });
+            fields.push({ fieldName: 'cost_amount', reason: 'Cost or expense value', abstractName: 'cost_amount', matchMethod: 'fallback_keyword' });
         }
         // Customer entities
         if (descLower.includes('customer') || descLower.includes('client') || descLower.includes('subscriber') || descLower.includes('user')) {
-            fields.push({ fieldName: 'customer_id', reason: 'Unique identifier for each customer' });
+            fields.push({ fieldName: 'customer_id', reason: 'Unique identifier for each customer', abstractName: 'customer_id', matchMethod: 'fallback_keyword' });
         }
         // Engagement/satisfaction entities
         if (descLower.includes('engagement') || descLower.includes('satisfaction') || descLower.includes('score') || descLower.includes('rating') || descLower.includes('nps')) {
-            fields.push({ fieldName: 'score', reason: 'Measurement or rating value' });
-            fields.push({ fieldName: 'survey_date', reason: 'Date of measurement or survey' });
+            fields.push({ fieldName: 'score', reason: 'Measurement or rating value', abstractName: 'score', matchMethod: 'fallback_keyword' });
+            fields.push({ fieldName: 'survey_date', reason: 'Date of the measurement or survey', abstractName: 'survey_date', matchMethod: 'fallback_keyword' });
         }
         // Department/team entities
         if (descLower.includes('department') || descLower.includes('team') || descLower.includes('division') || descLower.includes('unit')) {
-            fields.push({ fieldName: 'department', reason: 'Department or team grouping' });
+            fields.push({ fieldName: 'department', reason: 'Department or team grouping', abstractName: 'department', matchMethod: 'fallback_keyword' });
         }
         // Company/organization entities
         if (descLower.includes('company') || descLower.includes('organization') || descLower.includes('branch') || descLower.includes('location')) {
-            fields.push({ fieldName: 'company_name', reason: 'Organization or location identifier' });
+            fields.push({ fieldName: 'company_name', reason: 'Organization or location identifier', abstractName: 'company_name', matchMethod: 'fallback_keyword' });
         }
         // Performance entities
         if (descLower.includes('performance') || descLower.includes('productivity') || descLower.includes('output') || descLower.includes('kpi')) {
-            fields.push({ fieldName: 'performance_metric', reason: 'Performance measurement value' });
+            fields.push({ fieldName: 'performance_metric', reason: 'Performance measurement value', abstractName: 'performance_metric', matchMethod: 'fallback_keyword' });
         }
         // Retention/churn entities
         if (descLower.includes('retention') || descLower.includes('churn') || descLower.includes('loyalty')) {
-            fields.push({ fieldName: 'status', reason: 'Active/inactive/churned status' });
-            fields.push({ fieldName: 'start_date', reason: 'Date relationship began' });
+            fields.push({ fieldName: 'status', reason: 'Active/inactive/churned status', abstractName: 'status', matchMethod: 'fallback_keyword' });
+            fields.push({ fieldName: 'start_date', reason: 'Date relationship began', abstractName: 'start_date', matchMethod: 'fallback_keyword' });
         }
 
         // Deduplicate by fieldName
@@ -3889,6 +4340,21 @@ assert df['${element.sourceField}'].nunique() == len(df), "Field must have uniqu
             seen.add(f.fieldName);
             return true;
         });
+    }
+
+    /**
+     * Get human-readable description of the match method used
+     */
+    private getMatchMethodDescription(matchType: string, column: string, pattern?: string): string {
+        const descriptions: Record<string, string> = {
+            'date_presence_indicator': `Date presence check (if ${column} is not null)`,
+            'count_distinct': `Count distinct values in ${column}`,
+            'pattern_match_all': `Pattern match: ${pattern}`,
+            'pattern_match_first': `First pattern match: ${pattern}`,
+            'direct_value': `Direct column reference: ${column}`,
+            'date_range_filter': `Date range filter on ${column}`
+        };
+        return descriptions[matchType] || matchType;
     }
 
     private async enhanceElementsWithColumnMapping(

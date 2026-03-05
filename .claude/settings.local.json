@@ -142,7 +142,13 @@
       "Bash(git -C \"C:\\\\Users\\\\scmak\\\\Documents\\\\Work\\\\Projects\\\\Chimari\\\\chimariapp2\\\\ChimariData_Flowise-chimaridataApp2\" status shared/schema.ts)",
       "Bash(git -C \"C:\\\\Users\\\\scmak\\\\Documents\\\\Work\\\\Projects\\\\Chimari\\\\chimariapp2\\\\ChimariData_Flowise-chimaridataApp2\" log --all --full-history -- migrations/)",
       "Bash(git -C \"C:\\\\Users\\\\scmak\\\\Documents\\\\Work\\\\Projects\\\\Chimari\\\\chimariapp2\\\\ChimariData_Flowise-chimaridataApp2\" log --all --full-history -p -- \"*column*embedding*\")",
-      "WebFetch(domain:ai.google.dev)"
+      "WebFetch(domain:ai.google.dev)",
+      "Bash(git checkout:*)",
+      "Bash(git merge:*)",
+      "Bash(git push:*)",
+      "Bash(python3:*)",
+      "Bash(/c/Users/scmak/AppData/Local/Microsoft/WindowsApps/PythonSoftwareFoundation/Python/3.12/python.exe fix_extractOperationalFields.py)",
+      "mcp__Claude_Preview__preview_start"
     ],
     "deny": [],
     "ask": []

@@ -33,6 +33,16 @@ interface ColumnEmbeddingInput {
   datasetId: string;
   projectId: string;
   columns: ColumnInput[];
+  datasetContext?: DatasetContext;
+}
+
+interface DatasetContext {
+  datasetKind?: string;
+  identifierCandidates?: string[];
+  periodColumns?: string[];
+  numericColumns?: string[];
+  textColumns?: string[];
+  recordIdColumn?: string;
 }
 
 interface SimilarColumnResult {
@@ -50,7 +60,7 @@ export class ColumnEmbeddingGenerator {
    * Called ASYNC after upload/join/PII processing
    */
   async generateEmbeddingsForDataset(input: ColumnEmbeddingInput): Promise<void> {
-    const { datasetId, projectId, columns } = input;
+    const { datasetId, projectId, columns, datasetContext } = input;
     console.log(`🔢 [Embedding] Starting async embedding generation for ${columns.length} columns`);
 
     try {
@@ -65,7 +75,7 @@ export class ColumnEmbeddingGenerator {
         await Promise.all(batch.map(async (col) => {
           try {
             // Build rich context for better embedding quality
-            const context = this.buildColumnContext(col);
+            const context = this.buildColumnContext(col, datasetContext);
 
             // Generate embedding using the unified embedding service
             const embeddingResult = await embeddingService.embedText(context);
@@ -125,11 +135,36 @@ export class ColumnEmbeddingGenerator {
    * Build rich context string for better embedding quality
    * Includes column name, type, sample values, and semantic hints
    */
-  private buildColumnContext(col: ColumnInput): string {
+  private buildColumnContext(col: ColumnInput, datasetContext?: DatasetContext): string {
     const parts: string[] = [
       `Column: ${col.name}`,
       `Type: ${col.type}`,
     ];
+
+    if (datasetContext) {
+      const contextParts: string[] = [];
+      if (datasetContext.datasetKind) {
+        contextParts.push(`Dataset kind: ${datasetContext.datasetKind}`);
+      }
+      if (datasetContext.recordIdColumn) {
+        contextParts.push(`Record identifier: ${datasetContext.recordIdColumn}`);
+      }
+      if (datasetContext.identifierCandidates?.length) {
+        contextParts.push(`Identifier candidates: ${datasetContext.identifierCandidates.slice(0, 5).join(', ')}`);
+      }
+      if (datasetContext.periodColumns?.length) {
+        contextParts.push(`Period columns: ${datasetContext.periodColumns.slice(0, 5).join(', ')}`);
+      }
+      if (datasetContext.textColumns?.length) {
+        contextParts.push(`Text columns: ${datasetContext.textColumns.slice(0, 5).join(', ')}`);
+      }
+      if (datasetContext.numericColumns?.length) {
+        contextParts.push(`Numeric columns: ${datasetContext.numericColumns.slice(0, 5).join(', ')}`);
+      }
+      if (contextParts.length > 0) {
+        parts.push(contextParts.join('. '));
+      }
+    }
 
     // Add sample values for additional context
     if (col.sampleValues?.length) {

@@ -1358,6 +1358,7 @@ export class SourceColumnMapper {
       };
       userQuestions?: string[];
       analysisPath?: any[];
+      datasetProfiles?: Record<string, { datasetKind?: string; periodColumns?: string[] }>;
     };
     metadata?: {
       industry?: string;
@@ -1401,6 +1402,17 @@ export class SourceColumnMapper {
         context.analysisType = 'performance';
       } else if (analysisTypes.includes('churn') || analysisTypes.includes('retention')) {
         context.analysisType = 'retention';
+      }
+    }
+
+    // Use dataset profile hints if available
+    const datasetProfiles = Object.values(project.journeyProgress?.datasetProfiles || {});
+    if (datasetProfiles.length > 0) {
+      if (!context.dataContext && datasetProfiles.some((profile) => profile.datasetKind === 'survey')) {
+        context.dataContext = 'survey';
+      }
+      if (!context.analysisType && datasetProfiles.some((profile) => (profile.periodColumns || []).length > 0)) {
+        context.analysisType = 'time_series';
       }
     }
 

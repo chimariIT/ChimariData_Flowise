@@ -194,8 +194,8 @@ export function WorkflowTransparencyDashboard({
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900">Workflow Transparency</h2>
-          <p className="text-gray-600">Real-time view of your analysis pipeline</p>
+          <h2 className="text-2xl font-bold text-gray-900">Results & Traceability</h2>
+          <p className="text-gray-600">Results-first view with optional process detail</p>
         </div>
         <div className="flex items-center space-x-2">
           <Badge variant="outline" className="flex items-center space-x-1">
@@ -207,10 +207,10 @@ export function WorkflowTransparencyDashboard({
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="grid w-full grid-cols-4">
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="agents">Agent Activities</TabsTrigger>
-          <TabsTrigger value="decisions">Decision Trail</TabsTrigger>
+          <TabsTrigger value="overview">Results Overview</TabsTrigger>
           <TabsTrigger value="artifacts">Artifacts</TabsTrigger>
+          <TabsTrigger value="decisions">How We Got Here</TabsTrigger>
+          <TabsTrigger value="agents">Agent Work</TabsTrigger>
         </TabsList>
 
         {/* Overview Tab */}
@@ -220,10 +220,10 @@ export function WorkflowTransparencyDashboard({
             <CardHeader>
               <CardTitle className="flex items-center space-x-2">
                 <TrendingUp className="w-5 h-5" />
-                <span>Analysis Progress</span>
+                <span>Results Progress</span>
               </CardTitle>
               <CardDescription>
-                Current status of your analysis pipeline
+                Current status of your results delivery
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -258,9 +258,9 @@ export function WorkflowTransparencyDashboard({
           {/* Workflow Steps */}
           <Card>
             <CardHeader>
-              <CardTitle>Workflow Steps</CardTitle>
+              <CardTitle>Delivery Steps</CardTitle>
               <CardDescription>
-                Detailed view of each analysis step
+                Track the steps that produce your results
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -331,7 +331,7 @@ export function WorkflowTransparencyDashboard({
           </Card>
         </TabsContent>
 
-        {/* Agent Activities Tab */}
+        {/* Agent Work Tab */}
         <TabsContent value="agents" className="space-y-6">
           {agentActivitiesSafe.length === 0 ? (
             <Card>

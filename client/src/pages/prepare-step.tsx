@@ -483,13 +483,13 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
 
   // Generate required data elements from goals/questions
   // FIX: Return the document so callers can use it directly without waiting for state update
-  const generateDataRequirements = async (): Promise<any | null> => {
+  const generateDataRequirements = async (overrides?: { goalOverride?: string; questionsOverride?: string }): Promise<any | null> => {
     // CRITICAL FIX: Use currentProjectId from useProject hook (most reliable source)
     // Also check URL and localStorage as fallbacks
     const projectId = currentProjectId || urlProjectId || localStorage.getItem('currentProjectId');
 
     // CRITICAL FIX: Check both state and journeyProgress for goal (state might not be updated yet)
-    const effectiveGoal = analysisGoal.trim() || (journeyProgress as any)?.analysisGoal || '';
+    const effectiveGoal = (overrides?.goalOverride || '').trim() || analysisGoal.trim() || (journeyProgress as any)?.analysisGoal || '';
     
     if (!projectId) {
       console.warn('Cannot generate data requirements: missing project ID', {
@@ -521,9 +521,11 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
       // CRITICAL FIX: Use effectiveGoal (from state or journeyProgress) instead of just analysisGoal state
       const userGoals = effectiveGoal.split('.').map((g: string) => g.trim()).filter((g: string) => g);
       // Also check journeyProgress for questions if businessQuestions state is empty
-      const effectiveQuestions = businessQuestions.trim() || 
-                                  (journeyProgress as any)?.userQuestions?.map((q: any) => q.text).join('\n') || '';
+      const effectiveQuestions = (overrides?.questionsOverride || '').trim() || businessQuestions.trim() || 
+                  (journeyProgress as any)?.userQuestions?.map((q: any) => q.text).join('\n') || '';
       const userQuestions = effectiveQuestions.split('\n').map((q: string) => q.trim()).filter((q: string) => q);
+
+      const effectiveIndustry = industryOverride || detectedIndustry || 'general';
 
       if (userQuestions.length > 0) {
         try {
@@ -560,7 +562,8 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
         const researcherResponse = await apiClient.post(`/api/projects/${projectId}/recommend-templates`, {
           businessGoals: userGoals,
           userQuestions,
-          journeyType
+          journeyType,
+          industryContext: { industry: effectiveIndustry }
         });
 
         if (researcherResponse.success && researcherResponse.recommendations) {
@@ -575,7 +578,6 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
 
       // FIX 1C: Flush industry to journeyProgress BEFORE triggering requirements generation
       // This eliminates the race condition where debounced auto-save hasn't fired yet
-      const effectiveIndustry = industryOverride || detectedIndustry || 'general';
       try {
         await updateProgressAsync({ industry: effectiveIndustry });
         console.log(`✅ [Fix 1C] Flushed industry="${effectiveIndustry}" to journeyProgress before requirements call`);
@@ -1343,7 +1345,10 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
             // Generate required data elements based on goals/questions
             // Wrap in try-catch so dialog stays closed even if this fails
             try {
-              await generateDataRequirements();
+              await generateDataRequirements({
+                goalOverride: refinedGoal || analysisGoal,
+                questionsOverride: businessQuestions
+              });
             } catch (genError) {
               console.warn('⚠️ [Clarification] Failed to generate requirements, user can proceed manually:', genError);
               toast({

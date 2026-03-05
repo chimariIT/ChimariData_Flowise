@@ -110,8 +110,19 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
     qualityScore: number;
   }
 
+  interface DatasetProfileSummary {
+    datasetKind?: string;
+    identifierCandidates?: string[];
+    periodColumns?: string[];
+    numericColumns?: string[];
+    textColumns?: string[];
+    recordIdColumn?: string;
+    confidence?: number;
+  }
+
   const [dataValidation, setDataValidation] = useState<Record<string, ValidationStats>>({});
   const [linkedSchema, setLinkedSchema] = useState<{ [table: string]: { columns: Record<string, string>, primaryKey?: string, foreignKeys?: Array<{ column: string, references: string }> } }>({});
+  const [datasetProfiles, setDatasetProfiles] = useState<Record<string, DatasetProfileSummary>>({});
   const [editingRelations, setEditingRelations] = useState(false);
   const [pendingRelations, setPendingRelations] = useState<{ [table: string]: { primaryKey?: string, foreignKeys: Array<{ column: string, references: string }> } }>({});
   const [inferring, setInferring] = useState(false);
@@ -244,15 +255,34 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
         return 'Schema Match';
       case 'metadata':
         return 'Stored Join Plan';
+      case 'common_columns':
+        return 'Common Columns';
+      case 'multi_period':
+        return 'Multi-Period Merge';
       default:
         return 'Fallback Preview';
     }
   }, [joinInsights]);
 
-  const joinStrategyLabel = useMemo(
-    () => (joinInsights?.joinStrategy === 'join' ? 'Joined View' : 'Stacked Preview'),
-    [joinInsights]
-  );
+  const joinStrategyLabel = useMemo(() => {
+    switch (joinInsights?.joinStrategy) {
+      case 'merge_common_columns':
+        return 'Common Columns Merge';
+      case 'multi_period_join':
+        return 'Multi-Period Merge';
+      case 'join':
+        return 'Joined View';
+      default:
+        return 'Stacked Preview';
+    }
+  }, [joinInsights]);
+
+  const formatDatasetKind = useCallback((value?: string) => {
+    if (!value) return 'Unknown';
+    return value
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, (char) => char.toUpperCase());
+  }, []);
 
   const filterDataPreviewColumns = useCallback((columnsToRemove: string[]) => {
     if (!columnsToRemove.length) return;
@@ -341,6 +371,7 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
         const newPreviews: Record<string, any[]> = {};
         const newValidations: Record<string, ValidationStats> = {};
         const newSchemas: { [table: string]: { columns: Record<string, string>, primaryKey?: string, foreignKeys?: Array<{ column: string, references: string }> } } = {};
+        const newProfiles: Record<string, DatasetProfileSummary> = {};
         const fileIds: string[] = [];
 
         datasets.forEach((datasetItem: any) => {
@@ -384,12 +415,17 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
               foreignKeys: []
             };
           }
+
+          if (datasetEntry.ingestionMetadata?.datasetProfile) {
+            newProfiles[normalizedTableName] = datasetEntry.ingestionMetadata.datasetProfile as DatasetProfileSummary;
+          }
         });
 
         if (Object.keys(newPreviews).length > 0) {
           setDataPreview(newPreviews);
           setDataValidation(newValidations);
           setLinkedSchema(prev => ({ ...prev, ...newSchemas }));
+          setDatasetProfiles(prev => ({ ...prev, ...newProfiles }));
           setUploadedFileIds(fileIds);
           setUploadStatus('completed');
         }
@@ -446,6 +482,7 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
       setJoinInsights(null);
       setDataValidation({});
       setLinkedSchema({});
+      setDatasetProfiles({});
       setPiiDecisionsByFile({});
       setPiiQueue([]);
       setPiiReviewCompleted(false);
@@ -1496,6 +1533,33 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
                         <Badge variant="outline" className="text-xs">PK: {def.primaryKey}</Badge>
                       )}
                     </div>
+                    {datasetProfiles[table] && (
+                      <div className="flex flex-wrap gap-2 mb-2">
+                        <Badge variant="outline" className="text-xs bg-emerald-50 text-emerald-700 border-emerald-200">
+                          {formatDatasetKind(datasetProfiles[table].datasetKind)}
+                        </Badge>
+                        {typeof datasetProfiles[table].confidence === 'number' && (
+                          <Badge variant="outline" className="text-xs bg-emerald-50 text-emerald-700 border-emerald-200">
+                            {Math.round((datasetProfiles[table].confidence || 0) * 100)}% confidence
+                          </Badge>
+                        )}
+                        {datasetProfiles[table].recordIdColumn && (
+                          <Badge variant="outline" className="text-xs bg-emerald-50 text-emerald-700 border-emerald-200">
+                            Record ID: {datasetProfiles[table].recordIdColumn}
+                          </Badge>
+                        )}
+                        {(datasetProfiles[table].periodColumns || []).length > 0 && (
+                          <Badge variant="outline" className="text-xs bg-emerald-50 text-emerald-700 border-emerald-200">
+                            Period: {datasetProfiles[table].periodColumns?.slice(0, 2).join(', ')}
+                          </Badge>
+                        )}
+                        {(datasetProfiles[table].textColumns || []).length > 0 && (
+                          <Badge variant="outline" className="text-xs bg-emerald-50 text-emerald-700 border-emerald-200">
+                            Text: {datasetProfiles[table].textColumns?.slice(0, 2).join(', ')}
+                          </Badge>
+                        )}
+                      </div>
+                    )}
                     <div className="flex flex-wrap gap-2 mb-2">
                       {Object.entries(def.columns).map(([col, type]) => (
                         <Badge key={col} variant="secondary" className="bg-green-100 text-green-800">

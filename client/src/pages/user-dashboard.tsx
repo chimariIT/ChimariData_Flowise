@@ -147,14 +147,13 @@ export default function UserDashboard({ user, onLogout }: UserDashboardProps) {
     const p = project as any;
     const jp = p?.journeyProgress;
 
-    // Check unpaid-complete FIRST — prevents routing to results when payment is still needed
+    // If the journey is done but unpaid, still send users to results for preview/paywall
     const isJourneyDone = jp?.percentComplete >= 100
       || (Array.isArray(jp?.completedSteps) && jp.completedSteps.length >= 8);
     const hasNotPaid = !(project as any)?.isPaid && !p?.analysisResults;
 
     if (isJourneyDone && hasNotPaid) {
-      const journeyType = (project as any)?.journeyType || 'non-tech';
-      setLocation(`/journeys/${journeyType}/pricing?projectId=${projectId}`);
+      setLocation(`/projects/${projectId}/results`);
       return;
     }
 

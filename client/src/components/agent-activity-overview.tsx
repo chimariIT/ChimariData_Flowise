@@ -260,7 +260,18 @@ function buildCoordinationFromContributions(contributions: Record<string, any>):
 }
 
 export default function AgentActivityOverview({ project, journeyState, onNavigateToInsights }: AgentActivityOverviewProps) {
+  const currentStepId = journeyState?.currentStep?.id?.toLowerCase() ?? "";
+  const currentStepName = journeyState?.currentStep?.name?.toLowerCase() ?? "";
+  const percentComplete = journeyState?.percentComplete ?? 0;
+  const isEarlyJourney =
+    currentStepId.includes("upload") ||
+    currentStepName.includes("upload") ||
+    percentComplete < 20;
+
   const coordination = useMemo(() => {
+    if (isEarlyJourney) {
+      return null;
+    }
     // Primary: multiAgentCoordination from project record
     const primary = safeParseCoordination((project as Record<string, unknown>).multiAgentCoordination);
     if (primary?.expertOpinions?.length) return primary;
@@ -273,7 +284,7 @@ export default function AgentActivityOverview({ project, journeyState, onNavigat
     }
 
     return primary;
-  }, [project.multiAgentCoordination, (project as any)?.journeyProgress]);
+  }, [project.multiAgentCoordination, (project as any)?.journeyProgress, isEarlyJourney]);
 
   const overallAssessment = coordination?.synthesis?.overallAssessment;
   const assessmentInfo = overallAssessment ? assessmentDisplay[overallAssessment] : undefined;

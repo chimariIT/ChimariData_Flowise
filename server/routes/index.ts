@@ -26,6 +26,7 @@ import adminRouter from './admin';
 import adminSecuredRouter from './admin-secured';
 import systemRouter from './system';
 import analyticsRouter from './analytics';
+import semanticLinksRouter from './semantic-links';
 import templateOnboardingRouter from './template-onboarding';
 import stripeWebhooksRouter from './stripe-webhooks';
 import stripeWebhookTestRouter from './stripe-webhook-test';
@@ -99,6 +100,7 @@ router.use('/', artifactsRouter); // Project artifact listing & downloads
 router.use('/billing', billingRouter); // Enhanced billing with capacity tracking
 router.use('/pricing', pricingRouter); // Pricing tiers and plans
 router.use('/analytics', ensureAuthenticated, analyticsRouter); // Tool analytics and system monitoring
+router.use('/semantic', ensureAuthenticated, semanticLinksRouter); // Semantic links for evidence chain traceability
 router.use('/performance', performanceWebhooksRouter); // Performance metrics + webhook management
 router.use('/template-onboarding', ensureAuthenticated, templateOnboardingRouter); // Business template research and onboarding - P3-3 FIX: Added auth
 router.use('/consultation', consultationRouter); // Consultation request and workflow management

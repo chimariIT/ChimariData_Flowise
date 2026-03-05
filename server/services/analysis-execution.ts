@@ -42,6 +42,52 @@ import { ComputeEngineSelector, type ComputeEngine, type ComputeSelectionResult 
 import { generateStableQuestionId } from '../constants';
 import { resolvePipelineIndustry } from './pipeline-context';
 
+const ANALYSIS_TYPE_ALIASES: Record<string, string> = {
+  descriptive: 'descriptive_statistics',
+  descriptive_stats: 'descriptive_statistics',
+  descriptive_statistics: 'descriptive_statistics',
+  exploratory_data_analysis: 'descriptive_statistics',
+  eda: 'descriptive_statistics',
+  statistical: 'statistical_analysis',
+  statistical_tests: 'statistical_analysis',
+  statistical_analysis: 'statistical_analysis',
+  comparative: 'comparative_analysis',
+  comparative_analysis: 'comparative_analysis',
+  group: 'group_analysis',
+  group_analysis: 'group_analysis',
+  correlation: 'correlation',
+  correlation_analysis: 'correlation_analysis',
+  regression: 'regression',
+  regression_analysis: 'regression_analysis',
+  clustering: 'clustering',
+  clustering_analysis: 'clustering_analysis',
+  segmentation: 'segmentation',
+  segmentation_analysis: 'segmentation_analysis',
+  classification: 'classification',
+  classification_analysis: 'classification_analysis',
+  time_series: 'time_series',
+  time_series_analysis: 'time_series_analysis',
+  trend: 'trend',
+  trend_analysis: 'trend_analysis',
+  predictive: 'predictive',
+  predictive_modeling: 'predictive_modeling',
+  text: 'text_analysis',
+  text_analysis: 'text_analysis',
+  ml: 'ml',
+  machine_learning: 'ml'
+};
+
+const normalizeAnalysisType = (analysisType: string | undefined | null): string => {
+  if (!analysisType) return '';
+  const cleaned = analysisType
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9_\s-]/g, '')
+    .replace(/[\s-]+/g, '_')
+    .replace(/__+/g, '_');
+  return ANALYSIS_TYPE_ALIASES[cleaned] || cleaned;
+};
+
 // P3-1: Import types from extracted module
 import type {
   Dataset,
@@ -634,6 +680,65 @@ export class AnalysisExecutionService {
       let questionAnswerMapping: QuestionAnalysisMapping[] = [];
       const insightToQuestionMap: Record<string, string[]> = {};
 
+      // ============================================================
+      // PRIORITY 6 FIX: Load question intents and filter analysis types
+      // ============================================================
+      // Connect question intent analysis to execution to ensure analyses match user's actual intent
+      const questionIntents = (project as any)?.journeyProgress?.questionIntents || [];
+      console.log(`🎯 [Priority 6] Loaded ${questionIntents.length} question intents from journeyProgress`);
+
+      // Import INTENT_TO_ANALYSIS_TYPES mapping
+      let filteredAnalysisTypes = request.analysisTypes;
+      if (questionIntents.length > 0) {
+        try {
+          const { QuestionIntentAnalyzer } = await import('./question-intent-analyzer');
+          const intentToAnalysisMap = new Map<string, string[]>();
+
+          // Build intent-to-analysis type map for quick lookup
+          for (const [intent, types] of Object.entries(QuestionIntentAnalyzer.INTENT_TO_ANALYSIS_TYPES)) {
+            for (const type of types) {
+              if (!intentToAnalysisMap.has(type)) {
+                intentToAnalysisMap.set(type, []);
+              }
+              intentToAnalysisMap.get(type)!.push(intent);
+            }
+          }
+
+          // Filter requested analysis types to only those that match question intents
+          const shouldIncludeAnalysisType = (analysisType: string): boolean => {
+            // Check if this analysis type is compatible with ANY question's intent
+            const intents = intentToAnalysisMap.get(analysisType);
+            if (!intents || intents.length === 0) {
+              // No intents map for this analysis type - include it
+              return true;
+            }
+
+            // Check if any question intent matches the analysis type's mapped intents
+            const hasCompatibleIntent = questionIntents.some((qi: any) =>
+              intents.includes(qi.intentType)
+            );
+
+            return hasCompatibleIntent;
+          };
+
+          filteredAnalysisTypes = request.analysisTypes.filter(shouldIncludeAnalysisType);
+
+          // Log filtering results
+          if (filteredAnalysisTypes.length < request.analysisTypes.length) {
+            const skipped = request.analysisTypes.length - filteredAnalysisTypes.length;
+            const skippedTypes = request.analysisTypes.filter((at: string) => !filteredAnalysisTypes.includes(at));
+            console.log(`🎯 [Priority 6] Filtered ${skipped} analysis type(s) that don't match question intents:`);
+            console.log(`   Skipped: [${skippedTypes.join(', ')}]`);
+            console.log(`   Kept: [${filteredAnalysisTypes.join(', ')}]`);
+          }
+        } catch (intentError: any) {
+          console.warn(`⚠️ [Priority 6] Failed to filter by intents, using all requested types:`, intentError);
+          filteredAnalysisTypes = request.analysisTypes;
+        }
+      } else {
+        console.log(`🎯 [Priority 6] No question intents available, using all ${request.analysisTypes.length} requested analysis types`);
+      }
+
       // ✅ GAP 5 FIX: Priority 1 - Use request.questionAnswerMapping if provided
       if (request.questionAnswerMapping && request.questionAnswerMapping.length > 0) {
         questionAnswerMapping = request.questionAnswerMapping.map(qam => ({
@@ -692,7 +797,7 @@ export class AnalysisExecutionService {
             questionId: q.id, // Use stable hash-based ID from project_questions table
             questionText: (q.text || q.question || '').trim(),
             requiredDataElements: [],
-            recommendedAnalyses: request.analysisTypes || [],
+            recommendedAnalyses: filteredAnalysisTypes || [], // ✅ Priority 6: Use filtered types
             transformationsNeeded: [],
             expectedArtifacts: []
           }));
@@ -709,7 +814,7 @@ export class AnalysisExecutionService {
             questionId: generateStableQuestionId(request.projectId, q),
             questionText: q.trim(),
             requiredDataElements: [],
-            recommendedAnalyses: request.analysisTypes || [],
+            recommendedAnalyses: filteredAnalysisTypes || [], // ✅ Priority 6: Use filtered types
             transformationsNeeded: [],
             expectedArtifacts: []
           }));
@@ -855,7 +960,6 @@ export class AnalysisExecutionService {
       }
 
       const datasetAnalysisElapsed = ((Date.now() - datasetAnalysisStart) / 1000).toFixed(2);
-      console.log(`✅ Parallel dataset analysis completed in ${datasetAnalysisElapsed}s`);
 
       const syntheticRecommendations = generateRecommendations(allInsights);
       allRecommendations.push(...syntheticRecommendations);
@@ -865,12 +969,12 @@ export class AnalysisExecutionService {
 
       const results: AnalysisResults = {
         projectId: request.projectId,
-        analysisTypes: request.analysisTypes,
+        analysisTypes: filteredAnalysisTypes, // ✅ Priority 6: Use intent-filtered types
         insights: allInsights,
         recommendations: allRecommendations,
         visualizations: allVisualizations,
         summary: {
-          totalAnalyses: request.analysisTypes.length,
+          totalAnalyses: filteredAnalysisTypes.length, // ✅ Priority 6: Use filtered count
           dataRowsProcessed: totalRows,
           columnsAnalyzed: totalColumns,
           executionTime: `${executionTime} seconds`,
@@ -879,11 +983,62 @@ export class AnalysisExecutionService {
         metadata: {
           executedAt: completedAt,
           datasetNames: projectDatasetList.map((d: any) => d.originalFileName),
-          techniques: request.analysisTypes
+          techniques: filteredAnalysisTypes // ✅ Priority 6: Use filtered types
         },
         questionAnswerMapping: questionAnswerMapping.length > 0 ? questionAnswerMapping : undefined, // Phase 3
         insightToQuestionMap: Object.keys(insightToQuestionMap).length > 0 ? insightToQuestionMap : undefined // Phase 3
       };
+
+      // ============================================================
+      // PRIORITY 5 FIX: Create insight→transformation semantic links
+      // ============================================================
+      // For complete traceability, link each insight back to
+      // transformation that generated it
+      console.log(`🔗 [Priority 5] Creating insight→transformation semantic links...`);
+
+      try {
+        const { semanticDataPipeline } = await import('./semantic-data-pipeline');
+        let linksCreated = 0;
+
+        // For each insight, find transformation that generated it
+        for (const insight of allInsights) {
+          // Check if insight has metadata about which transformation created it
+          const transformationId = insight.generatedBy as string;
+
+          if (transformationId) {
+            try {
+              await semanticDataPipeline.createLink(
+                request.projectId,
+                'insight',      // sourceType
+                insight.id,    // sourceId
+                'transformation', // targetType
+                transformationId, // targetId
+                {
+                  insightType: insight.category || 'generic',
+                  insightConfidence: insight.confidence || 0.8,
+                  linkedAt: new Date().toISOString()
+                },
+                0.9,  // confidence for direct linkage
+                'analysis_execution'  // createdBy
+              );
+              linksCreated++;
+              console.log(`   🔗 Linked insight "${insight.id}" to transformation "${transformationId}"`);
+            } catch (linkError: any) {
+              console.warn(`   ⚠️ Failed to link insight to transformation:`, linkError);
+            }
+          }
+        }
+
+        console.log(`✅ [Priority 5] Created ${linksCreated} insight→transformation semantic links`);
+
+        // Store link creation count in results metadata for tracking
+        if (linksCreated > 0) {
+          (results.metadata as any).insightTransformationLinks = linksCreated;
+        }
+      } catch (linkError: any) {
+        console.warn(`⚠️ [Priority 5] Failed to create insight→transformation semantic links:`, linkError);
+        // Non-blocking - continue without semantic links
+      }
 
       const planCostBreakdown = (plan?.estimatedCost as CostBreakdown | undefined) ?? { total: 0, breakdown: {} };
       const projectCostBreakdown = (project.costBreakdown as CostBreakdown | null) ?? planCostBreakdown;
@@ -920,7 +1075,7 @@ export class AnalysisExecutionService {
         });
 
         // 2. Save analysis results to ds_analysis_results for each analysis type
-        for (const analysisType of request.analysisTypes) {
+        for (const analysisType of filteredAnalysisTypes) { // ✅ Priority 6: Use filtered types
           const resultId = nanoid();
           await db.insert(dsAnalysisResults).values({
             id: resultId,
@@ -1902,6 +2057,33 @@ export class AnalysisExecutionService {
   static async executeComprehensiveAnalysis(request: AnalysisRequest): Promise<AnalysisResults> {
     const executionStartTime = Date.now();
     const executionId = nanoid(8);
+
+    const normalizedAnalysisTypes = (request.analysisTypes || [])
+      .map((type) => normalizeAnalysisType(type))
+      .filter((type) => type.length > 0);
+    if (normalizedAnalysisTypes.length > 0) {
+      request.analysisTypes = normalizedAnalysisTypes;
+    }
+
+    if (request.analysisPath && request.analysisPath.length > 0) {
+      request.analysisPath = request.analysisPath.map((entry) => {
+        const fallbackType = entry.analysisType || entry.analysisName || entry.analysisId || '';
+        const normalizedType = normalizeAnalysisType(fallbackType) || entry.analysisType || '';
+        return {
+          ...entry,
+          analysisType: normalizedType
+        };
+      });
+    }
+
+    if (request.questionAnswerMapping && request.questionAnswerMapping.length > 0) {
+      request.questionAnswerMapping = request.questionAnswerMapping.map((mapping) => ({
+        ...mapping,
+        recommendedAnalyses: (mapping.recommendedAnalyses || [])
+          .map((analysisType) => normalizeAnalysisType(analysisType))
+          .filter((analysisType) => analysisType.length > 0)
+      }));
+    }
 
     // P2-2: Comprehensive execution logging for debugging
     console.log(`\n${'='.repeat(80)}`);

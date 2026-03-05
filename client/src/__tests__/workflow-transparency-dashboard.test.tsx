@@ -48,8 +48,8 @@ describe('WorkflowTransparencyDashboard - fallbacks and decision safety', () => 
     const steps = await screen.findAllByTestId('workflow-step');
     expect(steps.length).toBeGreaterThanOrEqual(3);
 
-    // Navigate to Agent Activities tab and ensure fallback agent cards render
-  const agentsTab = screen.getByText(/agent activities/i);
+    // Navigate to Agent Work tab and ensure fallback agent cards render
+  const agentsTab = screen.getByText(/agent work/i);
   await userEvent.click(agentsTab);
 
   const pmCard = await screen.findByTestId('agent-card-project-manager', {}, { timeout: 3000 });
@@ -63,9 +63,9 @@ describe('WorkflowTransparencyDashboard - fallbacks and decision safety', () => 
   it('shows safe decision details: text, reasoning, confidence, and impact tag', async () => {
     renderWithClient(<WorkflowTransparencyDashboard projectId="p1" />);
 
-    // Wait for load and switch to Decision Trail
+    // Wait for load and switch to How We Got Here
     await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument(), { timeout: 2000 });
-    const decisionsTab = screen.getByText(/decision trail/i);
+    const decisionsTab = screen.getByText(/how we got here/i);
     await userEvent.click(decisionsTab);
 
     const entry = await screen.findByTestId('decision-entry', {}, { timeout: 3000 });

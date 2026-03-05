@@ -70,6 +70,31 @@ export async function getResumeRoute(
 ): Promise<string> {
   const currentStepId = resolveCurrentStepId(journeyState);
   const baseProjectRoute = `/project/${projectId}`;
+  const coreJourneySteps = [
+    'data',
+    'prepare',
+    'data-verification',
+    'data-transformation',
+    'plan',
+    'execute',
+    'pricing',
+    'results'
+  ];
+  const resolveFallbackStep = (): string | undefined => {
+    if (!journeyState || typeof journeyState !== 'object') {
+      return undefined;
+    }
+
+    const state = journeyState as JourneyStateResponse;
+    const currentIndex = state?.currentStep?.index;
+    const totalSteps = Array.isArray(state?.steps) ? state.steps.length : undefined;
+    if (typeof currentIndex !== 'number' || !totalSteps || totalSteps <= 1) {
+      return undefined;
+    }
+
+    const scaledIndex = Math.round((currentIndex / (totalSteps - 1)) * (coreJourneySteps.length - 1));
+    return coreJourneySteps[Math.max(0, Math.min(coreJourneySteps.length - 1, scaledIndex))];
+  };
   const ensureResumeFlag = (route: string): string => {
     if (!route) {
       return `${baseProjectRoute}?resume=true`;
@@ -115,5 +140,15 @@ export async function getResumeRoute(
   };
 
   // Return the route for the current step, or project page with resume flag as fallback
-  return ensureResumeFlag(stepRoutes[currentStepId] || baseProjectRoute);
+  const directRoute = stepRoutes[currentStepId];
+  if (directRoute) {
+    return ensureResumeFlag(directRoute);
+  }
+
+  const fallbackStep = resolveFallbackStep();
+  if (fallbackStep && stepRoutes[fallbackStep]) {
+    return ensureResumeFlag(stepRoutes[fallbackStep]);
+  }
+
+  return ensureResumeFlag(baseProjectRoute);
 }

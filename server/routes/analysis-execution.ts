@@ -36,7 +36,11 @@ interface AnalysisExecutionResponsePayload {
   recommendations: AnalysisExecutionResult['recommendations'];
   visualizations: AnalysisExecutionResult['visualizations'];
   analysisTypes: AnalysisExecutionResult['analysisTypes'];
-  metadata: AnalysisExecutionResult['metadata'] & { datasetCount: number };
+  metadata: AnalysisExecutionResult['metadata'] & {
+    datasetCount: number;
+    requestedAnalysisTypes?: string[];
+    normalizedAnalysisTypes?: string[];
+  };
   insightCount: number;
   recommendationCount: number;
   datasetCount: number;
@@ -638,6 +642,8 @@ router.post('/execute', ensureAuthenticated, async (req, res) => {
         ...results.metadata,
         datasetCount: results.metadata.datasetNames.length,
         executedAt: results.metadata.executedAt,
+        requestedAnalysisTypes: analysisTypes,
+        normalizedAnalysisTypes: results.analysisTypes || [],
       },
       insightCount: results.insights.length,
       recommendationCount: results.recommendations.length,
@@ -661,6 +667,10 @@ router.post('/execute', ensureAuthenticated, async (req, res) => {
       (results as any).analysisStatuses.forEach((status: any) => {
         console.log(`   - ${status.analysisName} (${status.analysisType}): ${status.status}, ${status.insightCount} insights`);
       });
+    }
+
+    if (analysisTypes.join('|') !== (results.analysisTypes || []).join('|')) {
+      console.log(`📊 [Execution Response] Normalized analysis types: [${analysisTypes.join(', ')}] → [${(results.analysisTypes || []).join(', ')}]`);
     }
 
     // FIX E2: Add billing context so frontend knows how the analysis was paid for

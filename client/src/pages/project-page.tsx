@@ -11,7 +11,6 @@ import { apiClient } from "@/lib/api";
 // AIInsights, DashboardBuilder, AudienceTranslatedResults, UserQuestionAnswers, PaymentStatusBanner
 // removed — results & payment gating now handled exclusively by dashboard-step.tsx
 import { ProjectArtifactTimeline } from "@/components/ProjectArtifactTimeline";
-import { WorkflowTransparencyDashboard } from "@/components/workflow-transparency-dashboard";
 import { JourneyLifecycleIndicator } from "@/components/JourneyLifecycleIndicator";
 import { EnhancedDataWorkflow } from "@/components/EnhancedDataWorkflow";
 import AgentActivityOverview from "@/components/agent-activity-overview";
@@ -188,22 +187,55 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
     const params = new URLSearchParams(currentSearch);
     const paymentStatus = params.get('payment');
     const sessionId = params.get('session_id');
+    const paymentIntentId = params.get('payment_intent');
+    const redirectStatus = params.get('redirect_status');
 
-    if (!paymentStatus || !projectId) return;
+    if (!projectId) return;
 
     // Set guard to prevent re-entry while async call is in progress
     hasProcessedPaymentRef.current = true;
 
+    const MAX_VERIFY_ATTEMPTS = 3;
+    const VERIFY_RETRY_DELAY_MS = 2000;
+
+    const verifyPaymentSession = async (attempt: number): Promise<boolean> => {
+      try {
+        const response = await apiClient.post('/api/payment/verify-session', {
+          sessionId: isCheckoutSuccess ? sessionId : undefined,
+          paymentIntentId: paymentIntentId || undefined,
+          projectId
+        });
+
+        if (response.success && response.paymentStatus === 'paid') {
+          return true;
+        }
+
+        if (attempt < MAX_VERIFY_ATTEMPTS) {
+          await new Promise((resolve) => setTimeout(resolve, VERIFY_RETRY_DELAY_MS));
+          return verifyPaymentSession(attempt + 1);
+        }
+
+        return false;
+      } catch (error: any) {
+        if (attempt < MAX_VERIFY_ATTEMPTS) {
+          await new Promise((resolve) => setTimeout(resolve, VERIFY_RETRY_DELAY_MS));
+          return verifyPaymentSession(attempt + 1);
+        }
+        throw error;
+      }
+    };
+
     const handlePaymentCallback = async () => {
-      if (paymentStatus === 'success' && sessionId) {
+      const isStripeIntentSuccess = redirectStatus === 'succeeded';
+      const isCheckoutSuccess = paymentStatus === 'success' && sessionId;
+      const shouldVerifyPayment = isCheckoutSuccess || (isStripeIntentSuccess && paymentIntentId) || (paymentStatus === 'success' && paymentIntentId);
+
+      if (shouldVerifyPayment) {
         // Verify payment with backend
         try {
-          const response = await apiClient.post('/api/payment/verify-session', {
-            sessionId,
-            projectId
-          });
+          const verified = await verifyPaymentSession(1);
 
-          if (response.success && response.paymentStatus === 'paid') {
+          if (verified) {
             toast({
               title: "Payment Successful!",
               description: "Your payment has been verified. Triggering analysis execution...",
@@ -242,6 +274,9 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
               });
             }
 
+            // Signal results polling in dashboard step
+            sessionStorage.setItem(`payment_completed_${projectId}`, 'true');
+
             // Navigate to results page
             const jType = (project as any)?.journeyType
               || (project as any)?.journeyProgress?.journeyType
@@ -255,8 +290,9 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
           } else {
             toast({
               title: "Payment Verification",
-              description: response.message || "Your payment is being processed.",
+              description: "Your payment is still processing. We will keep checking for confirmation.",
             });
+            hasProcessedPaymentRef.current = false;
           }
         } catch (error: any) {
           console.error('Payment verification error:', error);
@@ -269,7 +305,7 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
           });
           return; // Don't clear URL params on failure so retry is possible
         }
-      } else if (paymentStatus === 'cancelled') {
+      } else if (paymentStatus === 'cancelled' || redirectStatus === 'failed' || redirectStatus === 'canceled') {
         toast({
           title: "Payment Cancelled",
           description: "You can resume payment from the pricing step when ready.",
@@ -319,7 +355,7 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
       (Array.isArray(ar.analysisStatuses) && ar.analysisStatuses.length > 0) ||
       ar.questionAnswers
     );
-    const hasResults = hasPopulatedResults || (jp?.executionStatus === 'completed' && !!ar);
+    const hasResults = hasPopulatedResults || jp?.analysisResults || jp?.executionStatus === 'completed';
     // Only redirect if user didn't explicitly navigate to a specific tab
     const params = new URLSearchParams(currentSearch);
     const hasExplicitTab = params.has('tab');
@@ -612,7 +648,79 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
             )}
             <div className="mb-6 space-y-6">
               <JourneyLifecycleIndicator projectId={projectId} />
-              <WorkflowTransparencyDashboard projectId={projectId} />
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Brain className="w-5 h-5" />
+                    Results Summary
+                  </CardTitle>
+                  <CardDescription>
+                    Quick snapshot of answers and insights. Open the full results for details.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {(() => {
+                    const results = (project as any)?.analysisResults || (project as any)?.journeyProgress?.analysisResults;
+                    const insightsCount = Array.isArray(results?.insights) ? results.insights.length : 0;
+                    const recommendationsCount = Array.isArray(results?.recommendations) ? results.recommendations.length : 0;
+                    const visualizationsCount = Array.isArray(results?.visualizations)
+                      ? results.visualizations.length
+                      : Array.isArray(results?.charts)
+                        ? results.charts.length
+                        : 0;
+                    const answersCount = Array.isArray(results?.questionAnswers) ? results.questionAnswers.length : 0;
+                    const hasResults = (insightsCount + recommendationsCount + visualizationsCount + answersCount) > 0;
+
+                    return (
+                      <>
+                        <div className="grid gap-4 md:grid-cols-4">
+                          <div className="rounded-lg border bg-white p-4">
+                            <p className="text-xs uppercase text-gray-500">Answers</p>
+                            <p className="text-2xl font-semibold text-gray-900">{answersCount}</p>
+                          </div>
+                          <div className="rounded-lg border bg-white p-4">
+                            <p className="text-xs uppercase text-gray-500">Insights</p>
+                            <p className="text-2xl font-semibold text-gray-900">{insightsCount}</p>
+                          </div>
+                          <div className="rounded-lg border bg-white p-4">
+                            <p className="text-xs uppercase text-gray-500">Recommendations</p>
+                            <p className="text-2xl font-semibold text-gray-900">{recommendationsCount}</p>
+                          </div>
+                          <div className="rounded-lg border bg-white p-4">
+                            <p className="text-xs uppercase text-gray-500">Visuals</p>
+                            <p className="text-2xl font-semibold text-gray-900">{visualizationsCount}</p>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {hasResults ? (
+                            <Button onClick={() => setLocation(`/projects/${projectId}/results`)}>
+                              View Full Results
+                            </Button>
+                          ) : needsPayment && paymentRoute ? (
+                            <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => setLocation(paymentRoute)}>
+                              <CreditCard className="w-4 h-4 mr-2" />
+                              Proceed to Payment
+                            </Button>
+                          ) : journeyState?.canResume ? (
+                            <Button
+                              className="bg-green-600 hover:bg-green-700"
+                              onClick={async () => {
+                                const route = await getResumeRoute(projectId, journeyState);
+                                if (route) setLocation(route);
+                              }}
+                            >
+                              <PlayCircle className="w-4 h-4 mr-2" />
+                              Resume Journey
+                            </Button>
+                          ) : (
+                            <Button onClick={() => setLocation('/')}>Start Journey</Button>
+                          )}
+                        </div>
+                      </>
+                    );
+                  })()}
+                </CardContent>
+              </Card>
             </div>
             {enableSlaMetrics && (
               <Card>
