@@ -824,11 +824,13 @@ export const insights = pgTable("insights", {
   confidence: doublePrecision("confidence"),
   priority: integer("priority").default(0), // For ranking insights
   tags: jsonb("tags").$type<string[]>(),
+  generatedBy: varchar("generated_by"), // Component that generated the insight (e.g., 'data-science-orchestrator')
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => ({
   projectIdIdx: index("insights_project_id_idx").on(table.projectId),
   executionIdIdx: index("insights_execution_id_idx").on(table.executionId),
   typeIdx: index("insights_type_idx").on(table.insightType),
+  generatedByIdx: index("insights_generated_by_idx").on(table.generatedBy),
 }));
 
 // Data Engineer PII Detections - tracks PII columns and anonymization

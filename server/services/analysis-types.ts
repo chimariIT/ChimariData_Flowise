@@ -102,6 +102,7 @@ export interface AnalysisInsight {
   dataSource?: string;
   details?: any;
   answersQuestions?: string[]; // Phase 3: Question IDs this insight helps answer
+  generatedBy?: string; // Component that generated this insight (e.g., 'data-science-orchestrator')
 }
 
 export interface AnalysisRecommendation {

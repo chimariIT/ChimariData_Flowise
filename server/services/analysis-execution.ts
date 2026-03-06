@@ -842,7 +842,7 @@ export class AnalysisExecutionService {
           try {
             return await this.analyzeDataset(
               dataset,
-              request.analysisTypes,
+              filteredAnalysisTypes,
               request.projectId,
               userContext,
               columnsToExclude
@@ -938,6 +938,7 @@ export class AnalysisExecutionService {
           // Add answersQuestions field to insight (Phase 3)
           const taggedInsight = {
             ...insight,
+            generatedBy: 'data-science-orchestrator', // Track which component generated the insight
             answersQuestions: relatedQuestionIds.length > 0 ? relatedQuestionIds : undefined
           };
 
@@ -966,6 +967,8 @@ export class AnalysisExecutionService {
 
       const executionTime = ((Date.now() - startTime) / 1000).toFixed(1);
       const completedAt = new Date();
+
+      console.log(`📊 [Execution] Completed ${projectDatasetList.length} dataset(s) | Types: ${filteredAnalysisTypes.join(', ')} | Rows: ${totalRows} | Columns: ${totalColumns} | Insights: ${allInsights.length} | Visualizations: ${allVisualizations.length}`);
 
       const results: AnalysisResults = {
         projectId: request.projectId,
@@ -1100,6 +1103,7 @@ export class AnalysisExecutionService {
             confidence: Math.round(insight.confidence),
             supportingData: insight.details ? JSON.stringify(insight.details) : null,
             dataSource: insight.dataSource || null,
+            generatedBy: 'data-science-orchestrator', // Track which component generated the insight
           });
         }
 
@@ -1905,16 +1909,18 @@ export class AnalysisExecutionService {
         config: analysisConfig
       });
 
-      if (!processorResult.success || !processorResult.data) {
+      const normalizedData = this.normalizePythonResults(processorResult);
+
+      if (!processorResult.success || !normalizedData) {
         throw new Error(processorResult.error || 'Python processor returned no data');
       }
 
-      if (!processorResult.data.visualizations && processorResult.visualizations) {
-        processorResult.data.visualizations = processorResult.visualizations;
+      if (!normalizedData.visualizations && processorResult.visualizations) {
+        normalizedData.visualizations = processorResult.visualizations;
       }
 
       console.log(`✅ Python analysis complete for dataset ${dataset.id}`);
-      return processorResult.data;
+      return normalizedData;
 
     } catch (error: any) {
       const errorMsg = error?.message || String(error);
@@ -1939,6 +1945,134 @@ export class AnalysisExecutionService {
       console.log(`📊 Falling back to basic data profiling (error category: ${errorCategory})`);
       return await basicDataProfilingFromDataset(dataset, piiColumnsToExclude);
     }
+  }
+
+  private static normalizePythonResults(processorResult: any) {
+    if (!processorResult) {
+      return null;
+    }
+
+    const directData = processorResult.data;
+    if (directData && (directData.descriptive || directData.correlations || directData.regression || directData.clustering || directData.timeSeries)) {
+      return directData;
+    }
+
+    const results = processorResult.results || directData?.results;
+    if (!results || typeof results !== 'object') {
+      return directData || null;
+    }
+
+    const normalized: any = {};
+
+    const descriptive = results.descriptive || results.descriptive_stats || results.descriptive_statistics;
+    if (descriptive) {
+      normalized.descriptive = this.mapDescriptiveResults(descriptive);
+      if (normalized.descriptive?.rowCount != null) {
+        normalized.rowCount = normalized.descriptive.rowCount;
+      }
+      if (normalized.descriptive?.columnCount != null) {
+        normalized.columnCount = normalized.descriptive.columnCount;
+      }
+    }
+
+    const correlation = results.correlation || results.correlation_analysis;
+    if (correlation) {
+      normalized.correlations = this.mapCorrelationResults(correlation);
+    }
+
+    const regression = results.regression || results.regression_analysis;
+    if (regression) {
+      normalized.regression = this.mapRegressionResults(regression);
+    }
+
+    const clustering = results.clustering || results.clustering_analysis;
+    if (clustering) {
+      normalized.clustering = this.mapClusteringResults(clustering);
+    }
+
+    const timeSeries = results.time_series || results.time_series_analysis || results.timeSeries;
+    if (timeSeries) {
+      normalized.timeSeries = this.mapTimeSeriesResults(timeSeries);
+    }
+
+    if (!normalized.rowCount) {
+      const correlationSummary = correlation?.summary;
+      if (correlationSummary?.n_observations != null) {
+        normalized.rowCount = correlationSummary.n_observations;
+      }
+    }
+
+    if (!normalized.columnCount) {
+      const correlationSummary = correlation?.summary;
+      if (correlationSummary?.n_variables != null) {
+        normalized.columnCount = correlationSummary.n_variables;
+      }
+    }
+
+    return Object.keys(normalized).length > 0 ? normalized : (directData || results);
+  }
+
+  private static mapDescriptiveResults(result: any) {
+    const missingValuesMap = result?.missing_values || {};
+    const missingValuesTotal = Object.values(missingValuesMap).reduce((sum: number, val: any) => {
+      const num = typeof val === 'number' ? val : Number(val);
+      return Number.isFinite(num) ? sum + num : sum;
+    }, 0);
+
+    return {
+      rowCount: result?.n_observations ?? result?.rowCount ?? null,
+      columnCount: result?.n_variables ?? result?.columnCount ?? null,
+      missingValues: Number.isFinite(missingValuesTotal) ? missingValuesTotal : null,
+      details: result
+    };
+  }
+
+  private static mapCorrelationResults(result: any) {
+    const strongCorrelations = Array.isArray(result?.strong_correlations) ? result.strong_correlations : [];
+    return strongCorrelations.map((corr: any) => ({
+      variable1: corr.variable1,
+      variable2: corr.variable2,
+      correlation: corr.correlation
+    }));
+  }
+
+  private static mapRegressionResults(result: any) {
+    const metrics = result?.metrics || {};
+    const r2 = metrics?.test?.r2 ?? metrics?.train?.r2 ?? null;
+    const coefficients = result?.coefficients || {};
+    const topFeatures = Object.entries(coefficients)
+      .map(([feature, coefficient]) => ({ feature, coefficient: Number(coefficient) }))
+      .filter((entry) => Number.isFinite(entry.coefficient))
+      .sort((a, b) => Math.abs(b.coefficient) - Math.abs(a.coefficient))
+      .slice(0, 3)
+      .map((entry) => entry.feature);
+
+    return {
+      r2,
+      topFeatures,
+      details: result
+    };
+  }
+
+  private static mapClusteringResults(result: any) {
+    return {
+      nClusters: result?.n_clusters ?? null,
+      silhouetteScore: result?.metrics?.silhouette_score ?? null,
+      description: result?.metrics?.silhouette_score
+        ? `Silhouette score: ${Number(result.metrics.silhouette_score).toFixed(2)}`
+        : undefined,
+      details: result
+    };
+  }
+
+  private static mapTimeSeriesResults(result: any) {
+    const summary = result?.summary || {};
+    return {
+      trend: result?.trend?.direction || summary?.trend_direction || 'patterns',
+      seasonality: summary?.has_seasonality ?? null,
+      forecast: result?.forecast || null,
+      details: result
+    };
   }
 
   // P3-1: buildDatasetPayload, filterPIIColumns, extractDatasetRows,
