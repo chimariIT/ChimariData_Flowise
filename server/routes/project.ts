@@ -8507,6 +8507,31 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
             }).where(eq(datasetsTable.id, primaryDataset.id));
         });
 
+        // P0 guardrail: verify transformed data actually persisted before advancing pipeline state.
+        const persistedDataset = await storage.getDataset(primaryDataset.id);
+        const persistedTransformedData = (persistedDataset as any)?.ingestionMetadata?.transformedData;
+        const persistedCount = Array.isArray(persistedTransformedData) ? persistedTransformedData.length : -1;
+
+        if (!Array.isArray(persistedTransformedData)) {
+            throw new Error(
+                `Transformation persistence verification failed: transformedData missing for dataset ${primaryDataset.id}`
+            );
+        }
+
+        if (workingData.length > 0 && persistedCount <= 0) {
+            throw new Error(
+                `Transformation persistence verification failed: expected ${workingData.length} rows, found ${persistedCount}`
+            );
+        }
+
+        if (persistedCount !== workingData.length) {
+            console.warn(
+                `⚠️ [Transform Verify] Row count mismatch after persistence. expected=${workingData.length}, persisted=${persistedCount}`
+            );
+        }
+
+        console.log(`✅ [Transform Verify] transformedData persisted (${persistedCount} rows)`);
+
         // Use atomic merge for journeyProgress to prevent overwriting concurrent changes
         await storage.atomicMergeJourneyProgress(projectId, {
             transformationApplied: true,

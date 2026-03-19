@@ -19,6 +19,7 @@ import { projectArtifacts, projects, datasets, projectDatasets } from '../../sha
 import { eq, inArray } from 'drizzle-orm';
 import { normalizeQuestions } from '../utils/question-normalizer';
 import { columnEmbeddingService, ColumnEmbeddingResult, EncodingConfig } from './column-embedding-service';
+import { embeddingService } from './embedding-service';
 
 // ============================================
 // HEALTH CHECK UTILITY
@@ -2041,6 +2042,171 @@ export class DataScienceOrchestrator {
       return [...new Set(matched)];
     };
 
+    // ============================================
+    // FIX #6: P0 - Semantic similarity for evidence chain
+    // ============================================
+
+    // Helper: compute cosine similarity between two embedding vectors
+    const cosineSimilarity = (vec1: number[], vec2: number[]): number => {
+      if (vec1.length !== vec2.length) {
+        return 0;
+      }
+      let dotProduct = 0;
+      let norm1 = 0;
+      let norm2 = 0;
+      for (let i = 0; i < vec1.length; i++) {
+        dotProduct += vec1[i] * vec2[i];
+        norm1 += vec1[i] * vec1[i];
+        norm2 += vec2[i] * vec2[i];
+      }
+      if (norm1 === 0 || norm2 === 0) {
+        return 0;
+      }
+      return dotProduct / (Math.sqrt(norm1) * Math.sqrt(norm2));
+    };
+
+    // Helper: find semantically similar findings for a question using embeddings
+    const findSemanticallySimilarFindings = async (
+      questionText: string,
+      candidateFindings: AnalysisFinding[]
+    ): Promise<{ findings: AnalysisFinding[]; similarities: Map<string, number> }> => {
+      try {
+        console.log(`🔗 [P0-6] Computing semantic similarity for question: "${questionText.substring(0, 50)}..."`);
+
+        // Compute embedding for question
+        const questionEmbeddingResult = await embeddingService.embedText(questionText);
+        const questionEmbedding = questionEmbeddingResult?.embedding;
+        if (!questionEmbedding || questionEmbedding.length === 0) {
+          console.warn('⚠️ [P0-6] Failed to generate question embedding, falling back to keyword matching');
+          return { findings: [], similarities: new Map() };
+        }
+
+        const similarities = new Map<string, number>();
+        const threshold = 0.7; // Minimum similarity threshold for semantic match
+
+        for (const finding of candidateFindings) {
+          // Generate embedding for finding text (title + description)
+          const findingText = `${finding.title} ${finding.description}`.substring(0, 500);
+          const findingEmbeddingResult = await embeddingService.embedText(findingText);
+          const findingEmbedding = findingEmbeddingResult?.embedding;
+
+          if (findingEmbedding && findingEmbedding.length > 0) {
+            const similarity = cosineSimilarity(questionEmbedding, findingEmbedding);
+            similarities.set(finding.id, similarity);
+
+            if (similarity >= threshold) {
+              console.log(`🔗 [P0-6] Found semantic match (similarity=${similarity.toFixed(3)}): "${finding.title}"`);
+            }
+          }
+        }
+
+        // Filter findings by similarity threshold and sort by similarity score
+        const sortedFindings = candidateFindings
+          .filter(f => {
+            const sim = similarities.get(f.id) || 0;
+            return sim >= threshold;
+          })
+          .sort((a, b) => {
+            const simA = similarities.get(a.id) || 0;
+            const simB = similarities.get(b.id) || 0;
+            return simB - simA; // Descending order
+          })
+          .slice(0, 6); // Top 6 semantic matches
+
+        console.log(`🔗 [P0-6] Semantic matching found ${sortedFindings.length} relevant findings for question`);
+
+        return { findings: sortedFindings, similarities };
+      } catch (error) {
+        console.error('❌ [P0-6] Error in semantic similarity computation:', error);
+        return { findings: [], similarities: new Map() };
+      }
+    };
+
+    // Pre-compute embeddings for all findings to improve performance
+    const allFindingsCache = new Map<string, AnalysisFinding[]>();
+    const allCandidateFindings: AnalysisFinding[] = [];
+
+    // Build candidate findings from all analysis results
+    // Descriptive stats
+    if (statisticalReport.descriptiveStats) {
+      for (const stat of statisticalReport.descriptiveStats) {
+        const statAny = stat as any;
+        allCandidateFindings.push({
+          id: nanoid(),
+          analysisType: 'descriptive',
+          title: `${statAny.column} statistics`,
+          description: statAny.mean !== undefined
+            ? `Mean=${Number(statAny.mean).toFixed(2)}, Median=${Number(statAny.median || 0).toFixed(2)}, Std Dev=${Number(statAny.std || 0).toFixed(2)}`
+            : `Analyzed ${statAny.count || 0} values`,
+          significance: 'medium',
+          evidence: statAny,
+          dataElementsUsed: statAny.column ? [statAny.column] : []
+        });
+      }
+    }
+    // Correlations
+    for (const corr of statisticalReport.correlationMatrix.significantCorrelations) {
+      allCandidateFindings.push({
+        id: nanoid(),
+        analysisType: 'correlation',
+        title: `${corr.var1} and ${corr.var2} correlation`,
+        description: `Found ${corr.correlation > 0 ? 'positive' : 'negative'} correlation (r=${corr.correlation.toFixed(3)})`,
+        significance: Math.abs(corr.correlation) > 0.7 ? 'high' : Math.abs(corr.correlation) > 0.4 ? 'medium' : 'low',
+        evidence: corr,
+        dataElementsUsed: [corr.var1, corr.var2],
+        statisticalSignificance: { pValue: corr.pValue }
+      });
+    }
+    // ML models
+    for (const model of mlModels) {
+      if (model.problemType === 'regression') {
+        allCandidateFindings.push({
+          id: nanoid(),
+          analysisType: 'regression',
+          title: `Predictive model for ${model.targetColumn}`,
+          description: `Model explains ${((model.metrics.r2 || 0) * 100).toFixed(1)}% of variance`,
+          significance: 'high',
+          evidence: model.metrics,
+          dataElementsUsed: model.features
+        });
+      } else if (model.problemType === 'clustering') {
+        allCandidateFindings.push({
+          id: nanoid(),
+          analysisType: 'clustering',
+          title: 'Data Segmentation Analysis',
+          description: `Identified distinct groups in the data (silhouette score: ${(model.metrics.silhouetteScore || 0).toFixed(3)})`,
+          significance: (model.metrics.silhouetteScore || 0) > 0.5 ? 'high' : 'medium',
+          evidence: model.metrics,
+          dataElementsUsed: model.features
+        });
+      } else if (model.problemType === 'classification') {
+        allCandidateFindings.push({
+          id: nanoid(),
+          analysisType: 'classification',
+          title: `Classification model for ${model.targetColumn}`,
+          description: `Accuracy: ${((model.metrics.accuracy || 0) * 100).toFixed(1)}%`,
+          significance: 'high',
+          evidence: model.metrics,
+          dataElementsUsed: model.features
+        });
+      }
+      // Feature importance
+      if (model.featureImportance.length > 0) {
+        const topFeatures = model.featureImportance.slice(0, 3);
+        allCandidateFindings.push({
+          id: nanoid(),
+          analysisType: 'feature_importance',
+          title: 'Key Drivers Identified',
+          description: `Top factors: ${topFeatures.map(f => f.feature).join(', ')}`,
+          significance: 'high',
+          evidence: topFeatures,
+          dataElementsUsed: topFeatures.map(f => f.feature)
+        });
+      }
+    }
+
+    console.log(`🔗 [P0-6] Built candidate findings cache: ${allCandidateFindings.length} findings total`);
+
     for (let i = 0; i < questions.length; i++) {
       const question = questions[i];
       const questionLower = normalizeForLookup(question);
@@ -2141,6 +2307,62 @@ export class DataScienceOrchestrator {
               }
             }
           }
+        }
+      }
+
+      // ============================================
+      // FIX #6: P0 - Semantic similarity matching for robust answer-question linkage
+      // ============================================
+      // Use semantic matching to find relevant findings when:
+      // 1. No column matches found, OR
+      // 2. Pre-mapping is missing, OR
+      // 3. Need to supplement findings with semantic matches
+      const shouldUseSemanticMatching = !preMapping || matchedColumns.length === 0 || findings.length < 3;
+
+      if (shouldUseSemanticMatching) {
+        console.log(`🔗 [P0-6] Q${i + 1}: Using semantic matching (preMapping=${!!preMapping}, columnMatches=${matchedColumns.length}, currentFindings=${findings.length})`);
+
+        const semanticMatch = await findSemanticallySimilarFindings(question, allCandidateFindings);
+
+        // Merge semantic matches with existing findings, avoiding duplicates
+        const existingFindingIds = new Set(findings.map(f => f.id));
+        for (const semFinding of semanticMatch.findings) {
+          // Avoid duplicates by checking if similar finding already exists
+          const isDuplicate = findings.some(f => {
+            return (
+              f.title === semFinding.title ||
+              (f.analysisType === semFinding.analysisType && f.dataElementsUsed.join(',') === semFinding.dataElementsUsed.join(','))
+            );
+          });
+
+          if (!isDuplicate && findings.length < 8) {
+            // Add semantic match to findings
+            findings.push({
+              ...semFinding,
+              // Boost significance for high semantic similarity matches
+              significance: (semanticMatch.similarities.get(semFinding.id) || 0) > 0.85
+                ? 'high' as const
+                : semFinding.significance
+            });
+
+            // Add data elements from semantic matches
+            for (const de of semFinding.dataElementsUsed) {
+              if (!dataElements.includes(de)) {
+                dataElements.push(de);
+              }
+            }
+
+            // Add analysis types from semantic matches
+            if (!analysisTypes.includes(semFinding.analysisType)) {
+              analysisTypes.push(semFinding.analysisType);
+            }
+
+            console.log(`🔗 [P0-6] Added semantic match: "${semFinding.title}" (similarity=${(semanticMatch.similarities.get(semFinding.id) || 0).toFixed(3)})`);
+          }
+        }
+
+        if (semanticMatch.findings.length > 0) {
+          console.log(`🔗 [P0-6] Q${i + 1}: Merged ${semanticMatch.findings.length} semantic matches, total findings: ${findings.length}`);
         }
       }
 
@@ -2420,27 +2642,38 @@ export class DataScienceOrchestrator {
       }
 
       // Fix 5: Compute answer and confidence directly from findings
+      // FIX #6: P0 - Enhanced confidence scoring with semantic similarity
       let answer = '';
       let confidence = 0.30; // Default: no data found → low confidence (not 0.50)
       const evidence: string[] = [];
 
       if (findings.length > 0) {
-        // Determine if findings came from column-aware match vs keyword match
+        // Determine match type for confidence scoring
         const hasColumnMatch = matchedColumns.length > 0 && findings.some(f =>
           f.dataElementsUsed.some(de => matchedColumns.includes(de.toLowerCase()))
         );
+        const hasSemanticMatch = shouldUseSemanticMatching && findings.length > 0;
 
         const topFinding = findings[0];
         answer = topFinding.description;
         evidence.push(topFinding.title);
 
+        // FIX #6: P0 - Confidence scoring based on match type and significance
         if (hasColumnMatch) {
           // Direct column match → high confidence
           confidence = topFinding.significance === 'high' ? 0.90 : topFinding.significance === 'medium' ? 0.80 : 0.65;
+        } else if (hasSemanticMatch && preMapping) {
+          // Semantic match with pre-mapping → high confidence
+          confidence = topFinding.significance === 'high' ? 0.85 : topFinding.significance === 'medium' ? 0.75 : 0.60;
+        } else if (hasSemanticMatch) {
+          // Semantic match without pre-mapping → moderate-high confidence
+          confidence = topFinding.significance === 'high' ? 0.80 : topFinding.significance === 'medium' ? 0.70 : 0.55;
         } else {
-          // Keyword match → moderate confidence
+          // Keyword match only → moderate confidence
           confidence = topFinding.significance === 'high' ? 0.85 : topFinding.significance === 'medium' ? 0.70 : 0.50;
         }
+
+        console.log(`🔗 [P0-6] Q${i + 1} Confidence: ${confidence.toFixed(2)} (columnMatch=${hasColumnMatch}, semanticMatch=${hasSemanticMatch}, preMapping=${!!preMapping}, significance=${topFinding.significance})`);
 
         // Add additional findings context
         if (findings.length > 1) {
