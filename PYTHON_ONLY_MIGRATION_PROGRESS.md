@@ -26,6 +26,40 @@ The migration to a Python-only backend is progressing well. The core API layer h
 | **Template System** | ✅ Complete | Journey templates |
 | **Frontend Integration** | ✅ Complete | API client updated |
 
+## Recent Updates (March 19, 2026)
+
+### Service Integration Complete
+- ✅ **Legacy analysis endpoint** now wired to agent orchestrator
+  - Translates Node.js API format to Python backend format
+  - Creates orchestrator sessions and executes workflows
+  - Background task execution for async processing
+
+- ✅ **Results/insights endpoint** now wired to RAG evidence chain
+  - Fetches insights from database
+  - Includes evidence chain traceability
+  - Returns evidence chain counts for transparency
+
+### Database Infrastructure
+- ✅ Database connection pool configured and healthy
+- ✅ SQLAlchemy ORM models defined for all tables
+- ✅ Async session dependency injection working
+- ✅ Alembic migrations configured
+
+### Services Status
+- ✅ Agent Orchestrator - LangGraph workflow coordination
+- ✅ Semantic Matching - RAG-based question-to-element mapping
+- ✅ Transformation Engine - Business-aware transformations
+- ✅ RAG Evidence Chain - Evidence chain management
+- ✅ Data Verification - PII detection with Presidio
+- ✅ Analysis Orchestrator - Analysis execution coordination
+
+### GitHub Commits
+```
+b90b238 - feat: Wire up API routes to service implementations
+c31f665 - feat: Add project, payment, and template routes
+15dc0af - feat: Add legacy API compatibility endpoints
+```
+
 ---
 
 ## API Endpoints Implemented
