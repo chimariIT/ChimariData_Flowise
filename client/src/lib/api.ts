@@ -1,6 +1,6 @@
 // IMPORTANT: Direct backend connection to preserve Authorization headers
-// Vite proxy strips headers, so we connect directly in development
-export const API_BASE = import.meta.env.DEV ? 'http://localhost:5000' : window.location.origin;
+// Now connecting to Python backend on port 8000
+export const API_BASE = import.meta.env.DEV ? 'http://localhost:8000' : window.location.origin;
 const RETRYABLE_STATUS_CODES = [429, 502, 503, 504];
 const DEFAULT_RETRY_COUNT = 2;
 
@@ -610,6 +610,26 @@ export class APIClient {
     );
 
     return response?.journeyState ?? null;
+  }
+
+  // DU-1 FIX: Get join metadata WITHOUT actual data
+  async getJoinMetadata(projectId: string): Promise<any> {
+    const response = await this.request<{ metadata?: any }>(
+      `/api/projects/${projectId}/join-metadata`,
+      { method: 'GET' }
+    );
+
+    return response?.metadata ?? null;
+  }
+
+  // DU-1 FIX: Get individual datasets - returns array of dataset objects with previews
+  async getIndividualDatasets(projectId: string): Promise<any> {
+    const response = await this.request<{ individualDatasets?: any }>(
+      `/api/projects/${projectId}/individual-datasets`,
+      { method: 'GET' }
+    );
+
+    return response?.individualDatasets ?? null;
   }
 
   // Create a new project
