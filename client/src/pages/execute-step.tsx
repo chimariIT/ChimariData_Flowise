@@ -41,6 +41,12 @@ import { SmartDefaultsService, type DatasetSchema, type AnalysisRecommendation }
 import { realtimeClient } from "@/lib/realtime";
 import { QuotaStatusIndicator, QuotaExceededBanner, SubscriptionRequiredBanner } from "@/components/QuotaStatusIndicator";
 
+// Python Backend Integration
+import pythonJourneysAPI from "@/lib/python-backend-journeys";
+
+// Feature Flag: Set to true to use Python backend, false to use Node.js backend
+const USE_PYTHON_BACKEND = import.meta.env.VITE_USE_PYTHON_BACKEND === 'true' || false;
+
 interface ExecuteStepProps {
   journeyType: string;
   onNext?: () => void;
@@ -69,6 +75,18 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
 
   // FIX Phase 3: Use updateProgressAsync for proper async handling
   const { projectId, project, journeyProgress, updateProgress, updateProgressAsync, isUpdating, isLoading: projectLoading } = useProject(resolvedInitialProjectId);
+
+  // DU-1 Phase 4 FIX: Helper to get data source label for UI
+  function getDataSourceLabel(project: any): string {
+    const joinedData = project?.journeyProgress?.joinedData;
+    if (joinedData?.fullData && joinedData.fullData.length > 0) {
+      return `Using joined dataset (${joinedData.fullData.length} rows)`;
+    }
+    if (joinedData?.preview && joinedData.preview.length > 0) {
+      return `Using joined dataset (${joinedData.preview.length} rows preview)`;
+    }
+    return 'Using individual datasets';
+  }
 
   // const [executionStatus, setExecutionStatus] = useState<'idle' | 'configuring' | 'running' | 'completed' | 'error'>('idle');
   // const [executionProgress, setExecutionProgress] = useState(0);
