@@ -2,17 +2,44 @@
 
 Guidance for Claude Code working with this repository.
 
-**Last Updated**: January 29, 2026 | **Server Port**: 5000 | **Client Port**: 5173
+**Last Updated**: March 24, 2026 | **Python Backend**: Port 8000 | **Client Port**: 5173
+
+> **IMPORTANT**: This repository now uses the **Python FastAPI backend** as the primary backend. The legacy Node.js Express backend (port 5000) is still available but should only be used for rollback scenarios.
+
+---
+
+## Quick Start - Python Backend
+
+```bash
+# Terminal 1: Start Python Backend
+cd C:\Users\scmak\Documents\Work\Projects\Chimari\chimaridata-python-backend
+venv\Scripts\activate  # Windows
+source venv/bin/activate  # Git Bash/Linux
+uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
+
+# Terminal 2: Start Frontend (uses Vite proxy to Python backend on port 8000)
+cd C:\Users\scmak\Documents\Work\Projects\Chimari\chimariapp2\ChimariData_Flowise-chimaridataApp2
+npm run dev:frontend
+```
+
+**Verify Python Backend**: `curl http://localhost:8000/health`
+**Frontend URL**: http://localhost:5173
+**Python API Docs**: http://localhost:8000/docs
 
 ---
 
 ## Commands
 
 ```bash
-# Development
-npm run dev                    # Start both client & server
-npm run dev:server-only        # Server only
+# Development (Python Backend)
+npm run dev:frontend           # Frontend only (Vite on :5173, proxies API to port 8000)
+
+# Development (Legacy Node.js Backend - use only for rollback)
+npm run dev                    # Start both Node.js server & client
+npm run dev:server-only        # Node.js server only (port 5000)
 npm run dev:client             # Client only (vite on :5173)
+
+# Build
 npm run build                  # Production build
 npm run start                  # Start production server
 npm run check                  # TypeScript type checking (8GB heap)
@@ -43,19 +70,20 @@ npx playwright test -g "pattern"                   # Tests matching pattern
 | Layer | Technology |
 |-------|-----------|
 | **Frontend** | React 18 + TypeScript, Vite, Tailwind CSS + Radix UI |
-| **Backend** | Express.js + TypeScript |
-| **Real-time** | WebSocket via `ws` library (NOT Socket.IO) |
-| **Database** | PostgreSQL + Drizzle ORM |
+| **Backend (Primary)** | Python FastAPI + LangGraph (port 8000) |
+| **Backend (Legacy)** | Express.js + TypeScript (port 5000) - rollback only |
+| **Real-time** | WebSocket (Python backend: `/ws`, Node.js: `ws` library) |
+| **Database** | PostgreSQL + pgvector (embeddings) |
+| **ORM** | SQLAlchemy (Python), Drizzle (Node.js legacy) |
 | **State** | React Query (@tanstack/react-query) |
-| **Routing** | Wouter (client), Express (server) |
-| **Auth** | Passport.js (Google, GitHub, Microsoft, Apple, local) |
+| **Routing** | Wouter (client), FastAPI (Python), Express (Node.js legacy) |
+| **Auth** | JWT (Python), Passport.js (Node.js legacy) |
 | **AI** | Google Gemini (primary), OpenAI, Anthropic Claude |
+| **Agents** | LangGraph agents (Python), EventEmitter (Node.js legacy) |
 | **Payments** | Stripe with webhooks |
 | **Email** | SendGrid |
-| **Cache** | Redis (optional dev, required production) via ioredis |
-| **Testing** | Playwright (E2E), Vitest (unit/integration) |
-| **Build** | Vite (client), esbuild (server) |
-| **Python** | Analysis scripts in `python/` (stats, ML, forecasting) |
+| **Testing** | Playwright (E2E), Vitest (unit), Pytest (Python backend) |
+| **Build** | Vite (client), uvicorn (Python), esbuild (Node.js) |
 
 **Import Aliases** (client-side only via Vite):
 - `@` -> `client/src`
@@ -231,8 +259,19 @@ No mock auth middleware exists. All auth uses real Passport.js.
 Required `.env` variables (see `.env.example` for full list):
 
 ```bash
+# Database (Shared by both backends)
 DATABASE_URL="postgresql://..."        # Required
+
+# AI Providers
 GOOGLE_AI_API_KEY="..."                # Required (primary AI)
+OPENAI_API_KEY="..."                   # Optional
+ANTHROPIC_API_KEY="..."                # Optional
+
+# Python Backend (Primary)
+VITE_USE_PYTHON_BACKEND=true           # Enable Python backend
+PYTHON_BACKEND_URL=http://localhost:8000
+
+# Security
 SESSION_SECRET="..."                   # Required (strong in production)
 JWT_SECRET="..."                       # Required (strong in production)
 ENABLE_MOCK_MODE="false"              # MUST be false in production
@@ -243,12 +282,144 @@ Production additionally requires: `REDIS_URL`, `STRIPE_SECRET_KEY`, `VITE_STRIPE
 
 ### Windows Notes
 - Use `python` instead of `python3`
-- Server: port 5000, Client: port 5173
+- Python Backend: port 8000, Frontend: port 5173
 - Use Git Bash or PowerShell for npm scripts
 
-### Python Setup
+### Python Backend Setup
+
+The Python backend is located in a separate repository: `chimaridata-python-backend`
+
 ```bash
+# Clone and setup Python backend
+cd C:\Users\scmak\Documents\Work\Projects\Chimari\chimaridata-python-backend
+
+# Create virtual environment
+python -m venv venv
+venv\Scripts\activate  # Windows
+source venv/bin/activate  # Git Bash/Linux
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Setup database
+alembic upgrade head
+
+# Start backend
+uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+### Node.js Python Scripts (Legacy)
+```bash
+# For Node.js backend analysis scripts only
 pip install -r python/requirements.txt   # Note: python/, not python_scripts/
+```
+
+---
+
+## Python Backend (Primary)
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Frontend (Vite)                         │
+│                    http://localhost:5173                    │
+│                                                             │
+│  Vite Proxy: /api/* and /ws/* → http://localhost:8000      │
+└─────────────────────────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│              Python FastAPI Backend                         │
+│              http://localhost:8000                           │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │  FastAPI Application                                │   │
+│  │  - REST API (/api/v1/*)                            │   │
+│  │  - WebSocket (/ws)                                 │   │
+│  │  - Swagger UI (/docs)                              │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                                                             │
+│  ┌────────────┐  ┌────────────┐  ┌─────────────────────┐  │
+│  │   Agent    │  │  Semantic  │  │   Transformation    │  │
+│  │ Orchestrator│  │  Matching  │  │      Engine        │  │
+│  └────────────┘  └────────────┘  └─────────────────────┘  │
+│                                                             │
+│  ┌────────────┐  ┌────────────┐  ┌─────────────────────┐  │
+│  │  Analysis  │  │    RAG     │  │   Billing & RBAC    │  │
+│  │ Execution  │  │ Evidence   │  │                     │  │
+│  └────────────┘  └────────────┘  └─────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│              PostgreSQL + pgvector                          │
+│              localhost:5432                                 │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Python Backend API Endpoints
+
+**Health Check**: `GET /health`
+
+**Projects**: `GET /api/v1/projects`, `POST /api/v1/projects`, `GET /api/v1/projects/{id}`
+
+**Datasets**: `POST /api/v1/projects/{id}/upload`, `GET /api/v1/datasets/{id}`
+
+**Analysis**: `POST /api/v1/analysis/execute`, `GET /api/v1/analysis/{id}/status`
+
+**Admin**: `GET /api/v1/admin/overview`, `GET /api/v1/admin/users`
+
+**Knowledge**: `POST /api/v1/knowledge/search`, `GET /api/v1/knowledge/nodes/{id}/related`
+
+**Billing**: `GET /api/v1/billing/tiers`, `GET /api/v1/billing/invoices`
+
+**WebSocket**: `ws://localhost:8000/ws/{session_id}`
+
+### Python Backend Features
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| User Authentication | ✅ | JWT-based, compatible with frontend tokens |
+| Project Management | ✅ | CRUD operations, journey progress tracking |
+| Dataset Upload | ✅ | CSV, Excel, JSON with validation |
+| PII Detection | ✅ | Automated PII scanning and masking |
+| Data Transformation | ✅ | Column mappings, data type conversions |
+| Analysis Execution | ✅ | Descriptive stats, correlation, regression, clustering |
+| Agent Orchestrator | ✅ | LangGraph-based multi-agent system |
+| Knowledge Graph | ✅ | RAG with vector embeddings (pgvector) |
+| Billing & Subscriptions | ✅ | Stripe integration, tier management |
+| RBAC | ✅ | Role-based access control for admin |
+| WebSocket Updates | ✅ | Real-time progress and agent updates |
+
+### Python Backend Configuration
+
+Environment variables for `chimaridata-python-backend/.env`:
+
+```bash
+# Database
+DATABASE_URL=postgresql+asyncpg://postgres:password@localhost:5432/chimaridata_dev
+
+# JWT
+JWT_SECRET=your_jwt_secret_here
+JWT_ALGORITHM=HS256
+JWT_EXPIRATION_HOURS=24
+
+# CORS
+ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
+
+# AI
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
+GOOGLE_AI_API_KEY=AIzaSy...
+
+# Stripe
+STRIPE_SECRET_KEY=sk_test_...
+STRIPE_WEBHOOK_SECRET=whsec_...
+
+# File Upload
+UPLOAD_DIR=./uploads
+MAX_FILE_SIZE_MB=100
 ```
 
 ---
@@ -289,16 +460,50 @@ storage.updateProject(id, { status: 'ready' } as any);
 
 | Problem | Check |
 |---------|-------|
+| **Python Backend** | |
+| Python backend won't start | Check dependencies: `pip install -r requirements.txt` |
+| Python health check fails | `curl http://localhost:8000/health` |
+| Python API returns 404 | Check API prefix: `/api/v1/*` (Python) vs `/api/*` (Node.js) |
+| WebSocket not connecting | Check Python backend `/ws` endpoint is running |
+| Agent orchestration errors | Check LangGraph dependencies and agent configuration |
+| **Frontend** | |
+| API calls go to wrong port | Check `vite.config.ts` proxy (should be port 8000) |
+| CORS errors | Verify `ALLOWED_ORIGINS` in Python backend `.env` |
+| Auth token not sent | Check `Authorization` header in browser DevTools Network tab |
+| Stale data after step transitions | `refetchOnMount: 'always'` on React Query hooks |
+| **Node.js Backend (Legacy)** | |
 | Server won't start | Check startup logs: validation -> Python pool -> agents -> tools -> WebSocket |
 | Schema changes not applied | Run `npm run db:push`, then restart server |
-| Agent tools not working | Verify `initializeTools()` runs before `initializeAgents()` in `server/index.ts` |
-| WebSocket messages missing | Uses `ws` (NOT Socket.IO). Check `realtime-agent-bridge.ts` and `client/src/lib/realtime.ts` |
-| Mock data in results | Set `ENABLE_MOCK_MODE=false`, verify AI API keys, check Python scripts run |
+| Agent tools not working | Verify `initializeTools()` runs before `initializeAgents()` |
+| WebSocket messages missing | Uses `ws` library. Check `realtime-agent-bridge.ts` |
+| Mock data in results | Set `ENABLE_MOCK_MODE=false`, verify AI API keys |
 | Redis errors (dev) | Set `REDIS_ENABLED=false` for in-memory fallback |
-| 401/403 errors | Use `ensureAuthenticated` + `canAccessProject()`, admin bypass via `isAdmin` |
 | Python scripts failing | Verify `python --version`, install deps from `python/requirements.txt` |
 | Duplicate service files | Check BOTH `server/*.ts` and `server/services/*.ts` |
-| Stale data after step transitions | `refetchOnMount: 'always'` on React Query hooks; invalidate cache on navigation |
+
+### Frontend Proxy Verification
+
+Check that frontend is proxying to Python backend:
+
+1. **Browser DevTools → Network Tab**:
+   - Look for requests to `http://localhost:5173/api/*`
+   - These should be proxied to `http://localhost:8000`
+
+2. **Vite Config** (`vite.config.ts`):
+   ```typescript
+   proxy: {
+     '/api': {
+       target: 'http://localhost:8000',  // Python backend
+       // ...
+     }
+   }
+   ```
+
+3. **Environment Variable** (`.env.development`):
+   ```bash
+   VITE_USE_PYTHON_BACKEND=true
+   PYTHON_BACKEND_URL=http://localhost:8000
+   ```
 
 ---
 
@@ -319,18 +524,28 @@ storage.updateProject(id, { status: 'ready' } as any);
 
 ## Production Checklist
 
-- [ ] `NODE_ENV=production`, `ENABLE_MOCK_MODE=false`
-- [ ] Strong `SESSION_SECRET` and `JWT_SECRET`
-- [ ] Redis configured (`REDIS_URL`)
-- [ ] All AI provider keys set
+**Python Backend (Primary)**:
+- [ ] Python backend running on port 8000
+- [ ] Database migrations applied: `alembic upgrade head`
+- [ ] All AI provider keys set in Python backend `.env`
+- [ ] JWT secret matches frontend configuration
+- [ ] CORS origins include production domain
 - [ ] Stripe production keys configured
-- [ ] Rate limiting enabled (`ENABLE_RATE_LIMITING=true`)
-- [ ] Webhook verification enabled
-- [ ] `npm run db:push` applied to production DB
-- [ ] `npm run test:production` passes
-- [ ] Grep for "mock", "simulated" - none in user-facing code
-- [ ] Python scripts execute correctly
-- [ ] Server startup validation passes (exits code 1 on failure)
+- [ ] Redis configured for production (`REDIS_URL`)
+- [ ] WebSocket enabled (`/ws` endpoint)
+- [ ] Health check endpoint responds: `curl https://api.chimaridata.com/health`
+
+**Frontend**:
+- [ ] `VITE_USE_PYTHON_BACKEND=true` in production build
+- [ ] API base URL points to production backend
+- [ ] `npm run build` completes without errors
+- [ ] All tests pass: `npm run test:production`
+
+**Node.js Backend (Legacy)**:
+- [ ] (Only if needed for rollback) `NODE_ENV=production`, `ENABLE_MOCK_MODE=false`
+- [ ] (Only if needed) Strong `SESSION_SECRET` and `JWT_SECRET`
+- [ ] (Only if needed) Rate limiting enabled
+- [ ] (Only if needed) Server startup validation passes
 
 ---
 
@@ -338,16 +553,24 @@ storage.updateProject(id, { status: 'ready' } as any);
 
 | Document | Purpose |
 |----------|---------|
+| **Python Backend** | |
+| `verify-python-backend.md` | Frontend → Python backend connection guide |
+| `client/PYTHON_BACKEND_INTEGRATION_SUMMARY.md` | Python backend integration completion summary |
+| `MIGRATION_PROGRESS.md` | Frontend migration progress tracking |
+| `PYTHON_BACKEND_REQUIREMENTS.md` | Python backend requirements specification |
+| **Frontend** | |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Tech stack, data models, API routes, deployment |
-| [docs/AGENTIC_SYSTEM.md](docs/AGENTIC_SYSTEM.md) | Agents, tools, MCP, coordination workflows |
-| [docs/AGENTIC_ORCHESTRATION_DESIGN.md](docs/AGENTIC_ORCHESTRATION_DESIGN.md) | Dynamic tool discovery design (with implementation status) |
 | [docs/USER_JOURNEYS.md](docs/USER_JOURNEYS.md) | Journey types, workflows, analysis components |
-| [docs/U2A2A2U_COMPLETE_DATA_FLOW.md](docs/U2A2A2U_COMPLETE_DATA_FLOW.md) | U2A2A2U pipeline data flow, continuity breaks |
 | [docs/BILLING_ADMIN.md](docs/BILLING_ADMIN.md) | Subscriptions, payments, admin features |
 | [docs/ADMIN_INTERFACE.md](docs/ADMIN_INTERFACE.md) | All 11 admin UI pages, routing, architecture |
+| **Node.js Backend (Legacy)** | |
+| [docs/AGENTIC_SYSTEM.md](docs/AGENTIC_SYSTEM.md) | Agents, tools, MCP, coordination workflows |
+| [docs/AGENTIC_ORCHESTRATION_DESIGN.md](docs/AGENTIC_ORCHESTRATION_DESIGN.md) | Dynamic tool discovery design |
+| [docs/U2A2A2U_COMPLETE_DATA_FLOW.md](docs/U2A2A2U_COMPLETE_DATA_FLOW.md) | U2A2A2U pipeline data flow |
 | [docs/ADMIN_API_REFERENCE.md](docs/ADMIN_API_REFERENCE.md) | 165+ admin API endpoints reference |
 | [docs/MCP_TOOL_STATUS.md](docs/MCP_TOOL_STATUS.md) | 130+ MCP tool implementation status matrix |
 | [docs/SYSTEM_STATUS.md](docs/SYSTEM_STATUS.md) | System health, phase completion |
+| **Other** | |
 | [FIX_PLANS.md](FIX_PLANS.md) | Fix specifications (P0-P3 priorities) |
 | [DOCKER-SETUP.md](DOCKER-SETUP.md) | Docker and Redis setup |
 | [STRIPE-INTEGRATION.md](STRIPE-INTEGRATION.md) | Payment integration details |

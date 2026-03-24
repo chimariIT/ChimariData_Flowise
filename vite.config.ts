@@ -1,3 +1,27 @@
+/**
+ * Vite Configuration for ChimariData Frontend
+ *
+ * BACKEND ARCHITECTURE:
+ * - Primary: Python FastAPI Backend on port 8000 (chimaridata-python-backend)
+ * - Legacy: Node.js Express Backend on port 5000 (for rollback only)
+ *
+ * PROXY CONFIGURATION:
+ * - All /api/* requests → http://localhost:8000 (Python backend)
+ * - All /ws/* requests → ws://localhost:8000 (Python WebSocket)
+ *
+ * To switch back to Node.js backend:
+ * 1. Change proxy targets to 'http://localhost:5000'
+ * 2. Set VITE_USE_PYTHON_BACKEND=false in .env.development
+ * 3. Run `npm run dev` to start both Node.js backend and frontend
+ *
+ * For Python-only mode:
+ * 1. Start Python backend separately (see PYTHON_BACKEND_STARTUP.md)
+ * 2. Run `npm run dev:frontend` (client only, no Node.js server)
+ *
+ * @see PYTHON_BACKEND_STARTUP.md for complete startup instructions
+ * @see verify-python-backend.md for connection verification
+ */
+
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
@@ -85,8 +109,19 @@ export default defineConfig({
     port: 5173,
     host: true,
     proxy: {
+      // ========================================================================
+      // API Proxy - Routes all /api/* requests to Python FastAPI backend
+      // ========================================================================
+      // Python Backend (Primary): http://localhost:8000
+      // - Swagger API Docs: http://localhost:8000/docs
+      // - Health Check: http://localhost:8000/health
+      //
+      // To switch to Node.js backend (Legacy):
+      // 1. Change target to 'http://localhost:5000'
+      // 2. Set VITE_USE_PYTHON_BACKEND=false in .env.development
+      // ========================================================================
       '/api': {
-        target: 'http://localhost:5000',  // Must match PORT in .env
+        target: 'http://localhost:8000',  // Python FastAPI Backend (Primary)
         changeOrigin: true,
         secure: false,
         configure: (proxy, options) => {
@@ -111,8 +146,17 @@ export default defineConfig({
           });
         },
       },
+      // ========================================================================
+      // WebSocket Proxy - Routes all /ws/* connections to Python backend
+      // ========================================================================
+      // Python Backend WebSocket: ws://localhost:8000/ws
+      //
+      // To switch to Node.js backend (Legacy):
+      // 1. Change target to 'ws://localhost:5000'
+      // 2. Ensure Node.js backend is running with WebSocket enabled
+      // ========================================================================
       '/ws': {
-        target: 'ws://localhost:5000',  // Must match PORT in .env
+        target: 'ws://localhost:8000',  // Python Backend WebSocket (Primary)
         ws: true,
         changeOrigin: true,
         configure: (proxy) => {
