@@ -2,29 +2,54 @@
 
 A comprehensive data science platform with AI-guided analysis journeys for non-tech, business, and technical users.
 
+> **Note**: This repository now uses the **Python FastAPI backend** as the primary backend. The Node.js Express backend is legacy and should only be used for rollback scenarios. See [PYTHON_BACKEND_STARTUP.md](PYTHON_BACKEND_STARTUP.md) for complete setup instructions.
+
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Node.js 18+ 
-- PostgreSQL database (or Neon/Supabase)
+- **Python Backend**: Python 3.11+ (separate repository: `chimaridata-python-backend`)
+- Node.js 18+ (frontend only)
+- PostgreSQL database with pgvector extension
 - Environment variables (see `.env.example`)
 
 ### Installation
 
 ```bash
-# Install dependencies
+# Install frontend dependencies
 npm install
 
 # Copy environment template
-cp .env.example .env
+cp .env.example .env.development
 
 # Update .env with your configuration
 # (See Environment Variables section below)
+```
 
-# Start development server
+### Starting the Application
+
+**Option 1: Python Backend (Recommended)**
+
+```bash
+# Terminal 1: Start Python Backend
+cd chimaridata-python-backend
+venv\Scripts\activate  # Windows
+source venv/bin/activate  # Linux/Mac
+uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
+
+# Terminal 2: Start Frontend
+cd chimariapp2/ChimariData_Flowise-chimaridataApp2
+npm run dev:frontend
+
+# Visit http://localhost:5173
+```
+
+**Option 2: Node.js Backend (Legacy/Rollback Only)**
+
+```bash
+# Start both Node.js backend and frontend
 npm run dev
 
-# Visit http://localhost:3000
+# Visit http://localhost:5173
 ```
 
 ### Deployment
@@ -33,7 +58,7 @@ npm run dev
 # Build for production
 npm run build
 
-# Start production server
+# Start production server (if using Node.js backend)
 npm run start
 ```
 
@@ -85,24 +110,32 @@ GITHUB_CLIENT_ID="..."
 
 ## 🏗️ Architecture
 
-### Frontend (`client/`)
+### Backend (Primary: Python FastAPI)
+- **Repository**: `chimaridata-python-backend` (separate)
+- **Framework**: FastAPI + LangGraph agents
+- **ORM**: SQLAlchemy (async) with PostgreSQL + pgvector
+- **Port**: 8000
+- **API Docs**: http://localhost:8000/docs (Swagger UI)
+
+### Frontend
 - React 18 with TypeScript
+- Vite dev server (port 5173)
 - Tailwind CSS + Radix UI
 - React Query for state management
 - Wouter for routing
 
-### Backend (`server/`)
+### Backend (Legacy: Node.js Express)
 - Express.js with TypeScript
 - Drizzle ORM + PostgreSQL
-- WebSocket for real-time updates
-- Multi-provider AI integration
+- Port 5000
+- **Use Case**: Emergency rollback only
 
 ### Key Services
-- **FileProcessor**: CSV/Excel parsing and schema detection
-- **PythonProcessor**: Statistical analysis and ML
-- **AIService**: Multi-provider AI integration
-- **DataTransformer**: Data manipulation pipeline
-- **PricingService**: Subscription and usage tracking
+- **Agent Orchestrator**: LangGraph-based multi-agent system (Python)
+- **Semantic Matching**: Vector embeddings with pgvector (Python)
+- **Analysis Execution**: Native Python subprocess (Python)
+- **Transformation Engine**: Data manipulation pipeline (Python)
+- **Billing & RBAC**: Stripe integration, role-based access (Python)
 
 ## 🧪 Testing
 
@@ -171,19 +204,31 @@ npm run test:debug
 
 ### Project Structure
 ```
-├── client/          # React frontend
-├── server/          # Express backend
-├── shared/          # Shared types and schemas
-├── migrations/      # Database migrations
-├── python/          # Python analysis scripts
-└── uploads/         # File upload directory
+├── client/                    # React frontend (Vite)
+├── server/                    # Legacy Node.js backend (Express)
+├── shared/                    # Shared types and schemas
+├── migrations/                # Database migrations (Drizzle)
+├── python/                    # Legacy Python scripts for Node.js backend
+└── uploads/                   # File upload directory
+
+# Separate Repository
+└── chimaridata-python-backend/  # Primary Python backend (FastAPI)
 ```
 
-### Adding New Features
-1. Define schema in `shared/schema.ts`
-2. Create backend service in `server/`
-3. Add frontend components in `client/src/`
-4. Update API routes in `server/routes.ts`
+### Development Commands
+```bash
+npm run dev:frontend      # Frontend only (for Python backend)
+npm run dev                # Full stack (Node.js backend - legacy)
+npm run build              # Production build
+npm run check              # TypeScript check
+npm run test               # Run E2E tests
+npm run db:push            # Push schema changes to DB
+```
+
+### Documentation
+- `CLAUDE.md` - Complete development guide
+- `PYTHON_BACKEND_STARTUP.md` - Python backend setup
+- `docs/` - Architecture and API documentation
 
 ## 🚀 Deployment Options
 
