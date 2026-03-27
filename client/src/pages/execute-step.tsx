@@ -41,11 +41,6 @@ import { SmartDefaultsService, type DatasetSchema, type AnalysisRecommendation }
 import { realtimeClient } from "@/lib/realtime";
 import { QuotaStatusIndicator, QuotaExceededBanner, SubscriptionRequiredBanner } from "@/components/QuotaStatusIndicator";
 
-// Python Backend Integration
-import pythonJourneysAPI from "@/lib/python-backend-journeys";
-
-// Feature Flag: Set to true to use Python backend, false to use Node.js backend
-const USE_PYTHON_BACKEND = import.meta.env.VITE_USE_PYTHON_BACKEND === 'true' || false;
 
 interface ExecuteStepProps {
   journeyType: string;
@@ -1095,6 +1090,24 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
     // (e.g., "descriptive" appearing twice from different sources)
     analysesToExecute = [...new Set(analysesToExecute)];
 
+    // Additional SSOT restoration: covers non-auto-trigger cases where React state hasn't synced
+    if (analysesToExecute.length === 0) {
+      const jp = journeyProgress as any;
+      const ssotSources = [
+        jp?.executionConfig?.selectedAnalyses,
+        jp?.selectedAnalysisTypes,
+        (jp?.requirementsDocument?.analysisPath || []).map((a: any) => a.analysisType || a.type).filter(Boolean),
+      ];
+      for (const source of ssotSources) {
+        if (source?.length > 0) {
+          analysesToExecute = [...new Set(source)];
+          console.log('[Execute] Restored analyses from journeyProgress SSOT:', analysesToExecute);
+          setSelectedAnalyses(analysesToExecute);
+          break;
+        }
+      }
+    }
+
     if (analysesToExecute.length === 0) {
       // Last resort: use sensible defaults instead of failing entirely
       // The DS agent should have recommended types, but if state was lost during
@@ -1102,6 +1115,11 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
       analysesToExecute = ['statistical_analysis', 'exploratory_data_analysis'];
       console.warn('⚠️ [Execute] No analyses found in state or journeyProgress, using defaults:', analysesToExecute);
       setSelectedAnalyses(analysesToExecute);
+      toast({
+        title: "Using Default Analyses",
+        description: "Your analysis selections could not be restored. Using recommended defaults.",
+        variant: "default",
+      });
     }
 
     // Preserve the DS agent's original analysisPath metadata (requiredDataElements, dependencies, etc.)
@@ -1132,6 +1150,11 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         console.warn('Cost estimate unavailable, proceeding without confirmation:', costError);
         // ✅ P1-4 FIX: Do NOT return here - proceed with execution even if cost estimate fails
         // The old code had `return;` after this catch block which blocked execution
+        toast({
+          title: "Cost Estimate Unavailable",
+          description: "Unable to retrieve cost estimate. Proceeding with execution.",
+          variant: "default",
+        });
       }
       setCostLoading(false);
       // Fall through to continue execution without cost dialog if estimate failed

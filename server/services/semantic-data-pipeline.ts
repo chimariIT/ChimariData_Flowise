@@ -538,6 +538,17 @@ export class SemanticDataPipelineService {
     }
 
     console.log(`[SemanticPipeline] Finished linking questions to elements`);
+
+    // Validate link chain completeness
+    const validation = await this.validateLinkChain(projectId, questions);
+    if (!validation.complete) {
+      console.warn(`⚠️ [SemanticPipeline] Link chain incomplete: ${validation.stats.linkedQuestions}/${validation.stats.questions} questions linked`);
+      if (validation.stats.gaps.length > 0) {
+        console.warn(`   Gaps: ${validation.stats.gaps.slice(0, 5).join('; ')}${validation.stats.gaps.length > 5 ? ` ... and ${validation.stats.gaps.length - 5} more` : ''}`);
+      }
+    } else {
+      console.log(`[SemanticPipeline] Link chain validated: all ${validation.stats.questions} questions have element links`);
+    }
   }
 
   /**
@@ -1216,6 +1227,55 @@ export class SemanticDataPipelineService {
     }
 
     return eWords.length > 0 ? Math.min(1, matches / Math.max(eWords.length * 0.5, 1)) : 0;
+  }
+
+  /**
+   * Validate that the semantic link chain is complete for a project.
+   * Checks that all input questions have at least one element link.
+   */
+  async validateLinkChain(
+    projectId: string,
+    questions: QuestionInput[]
+  ): Promise<{
+    complete: boolean;
+    stats: { questions: number; linkedQuestions: number; elements: number; gaps: string[] };
+  }> {
+    try {
+      // Query all question_to_element links for this project
+      const links = await db.select()
+        .from(semanticLinks)
+        .where(and(
+          eq(semanticLinks.projectId, projectId),
+          eq(semanticLinks.linkType, 'question_to_element')
+        ));
+
+      const linkedQuestionIds = new Set(links.map(l => l.sourceId));
+      const gaps: string[] = [];
+
+      for (const q of questions) {
+        const qId = q.id || q.questionId;
+        if (qId && !linkedQuestionIds.has(qId)) {
+          const preview = (q.text || q.questionText || '').substring(0, 60);
+          gaps.push(`Question "${preview}..." has no element links`);
+        }
+      }
+
+      return {
+        complete: gaps.length === 0,
+        stats: {
+          questions: questions.length,
+          linkedQuestions: questions.length - gaps.length,
+          elements: links.length,
+          gaps,
+        },
+      };
+    } catch (error) {
+      console.error(`[SemanticPipeline] validateLinkChain failed:`, error);
+      return {
+        complete: false,
+        stats: { questions: questions.length, linkedQuestions: 0, elements: 0, gaps: ['Validation query failed'] },
+      };
+    }
   }
 }
 

@@ -47,6 +47,7 @@ export class RealtimeClient {
   private config: Required<RealtimeClientConfig>;
   private lastEventCache: Map<string, RealtimeEvent> = new Map();
   private stateChangeListeners: Set<(state: ConnectionState) => void> = new Set();
+  private stateSyncTimeout: NodeJS.Timeout | null = null;
 
   constructor(config: RealtimeClientConfig = {}) {
     this.config = {
@@ -492,6 +493,22 @@ export class RealtimeClient {
           projectId: projectId,
         });
       });
+
+      // Fallback: if no state_sync response arrives within 10s, invalidate caches
+      if (this.stateSyncTimeout) clearTimeout(this.stateSyncTimeout);
+      this.stateSyncTimeout = setTimeout(() => {
+        this.log('[Solution C] State sync timed out after 10s - invalidating React Query caches');
+        try {
+          // Dispatch a custom event that React components can listen for to invalidate caches
+          const event = new CustomEvent('realtime:state-sync-timeout', {
+            detail: { projectIds: Array.from(projectIds) }
+          });
+          window.dispatchEvent(event);
+        } catch (e) {
+          this.error('[Solution C] Failed to dispatch state sync timeout event:', e);
+        }
+        this.stateSyncTimeout = null;
+      }, 10000);
     }
   }
 
@@ -516,6 +533,12 @@ export class RealtimeClient {
    * Emits a special event that components can listen to for state updates.
    */
   private handleStateSync(data: any): void {
+    // Clear the fallback timeout since we received a sync response
+    if (this.stateSyncTimeout) {
+      clearTimeout(this.stateSyncTimeout);
+      this.stateSyncTimeout = null;
+    }
+
     const projectId = data.data?.projectId;
     if (!projectId) return;
 
@@ -683,7 +706,12 @@ export class RealtimeClient {
 
   public disconnect(): void {
     this.log('Manually disconnecting');
-    
+
+    if (this.stateSyncTimeout) {
+      clearTimeout(this.stateSyncTimeout);
+      this.stateSyncTimeout = null;
+    }
+
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
