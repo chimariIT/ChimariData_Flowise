@@ -1561,7 +1561,14 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
     const paymentIntentId = params.get('payment_intent');
     const redirectStatus = params.get('redirect_status');
 
-    if (!paymentSuccess || !resolvedProjectId || paymentVerified || paymentVerifying || projectLoading) return;
+    // FIX: Support multiple payment success indicators
+    // 1. Checkout Sessions: ?payment=success&session_id=cs_xxx
+    // 2. Stripe Elements: ?payment_intent=pi_xxx&redirect_status=succeeded
+    const isCheckoutSuccess = paymentSuccess && sessionId;
+    const isStripeIntentSuccess = redirectStatus === 'succeeded' && paymentIntentId;
+    const shouldVerifyPayment = isCheckoutSuccess || isStripeIntentSuccess;
+
+    if (!shouldVerifyPayment || !resolvedProjectId || paymentVerified || paymentVerifying || projectLoading) return;
 
     // Step 1: Verify payment with backend (sets isPaid=true in DB)
     // Supports both Checkout Sessions (session_id) and Payment Intents (payment_intent)
