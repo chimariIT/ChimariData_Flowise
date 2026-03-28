@@ -22,6 +22,76 @@ import { columnEmbeddingService, ColumnEmbeddingResult, EncodingConfig } from '.
 import { embeddingService } from './embedding-service';
 
 // ============================================
+// ANALYSIS TYPE → PYTHON SCRIPT MAPPING (SSOT)
+// ============================================
+// Centralizes all analysis type aliases and their target Python scripts.
+// Used by both runExploratoryAnalysis() and getPythonScriptsUsed().
+
+export const ANALYSIS_TYPE_SCRIPT_MAP: Record<string, string> = {
+  // Descriptive statistics
+  'descriptive': 'descriptive_stats.py',
+  'descriptive_statistics': 'descriptive_stats.py',
+  'exploratory_data_analysis': 'descriptive_stats.py',
+  // Correlation
+  'correlation': 'correlation_analysis.py',
+  'correlation_analysis': 'correlation_analysis.py',
+  // Comparative / statistical tests
+  'comparative': 'comparative_analysis.py',
+  'comparative_analysis': 'comparative_analysis.py',
+  'statistical_tests': 'comparative_analysis.py',
+  'statistical_analysis': 'comparative_analysis.py',
+  // Group / segment analysis
+  'group_analysis': 'group_analysis.py',
+  'group': 'group_analysis.py',
+  // Text / NLP analysis
+  'text_analysis': 'text_analysis.py',
+  'text': 'text_analysis.py',
+  // Regression / predictive
+  'regression': 'regression_analysis.py',
+  'regression_analysis': 'regression_analysis.py',
+  'predictive': 'regression_analysis.py',
+  'predictive_modeling': 'regression_analysis.py',
+  // Clustering / segmentation
+  'clustering': 'clustering_analysis.py',
+  'clustering_analysis': 'clustering_analysis.py',
+  'segmentation': 'clustering_analysis.py',
+  'segmentation_analysis': 'clustering_analysis.py',
+  // Classification
+  'classification': 'classification_analysis.py',
+  'classification_analysis': 'classification_analysis.py',
+  // ML
+  'ml': 'ml_training.py',
+  'machine-learning': 'ml_training.py',
+  // Time series
+  'time_series': 'time_series_analysis.py',
+  'time-series': 'time_series_analysis.py',
+  'time_series_analysis': 'time_series_analysis.py',
+  'trend': 'time_series_analysis.py',
+  'trend_analysis': 'time_series_analysis.py',
+};
+
+/**
+ * Validate that requested analysis types have corresponding Python scripts.
+ * Returns { valid, invalid } arrays so callers can filter and report.
+ */
+export function validateAnalysisTypes(types: string[]): { valid: string[]; invalid: string[] } {
+  const valid: string[] = [];
+  const invalid: string[] = [];
+  for (const t of types) {
+    const normalized = t.toLowerCase().trim();
+    if (ANALYSIS_TYPE_SCRIPT_MAP[normalized]) {
+      valid.push(normalized);
+    } else {
+      invalid.push(t);
+    }
+  }
+  if (invalid.length > 0) {
+    console.warn(`⚠️ [DSOrchestrator] Unrecognized analysis types (will be skipped): ${invalid.join(', ')}`);
+  }
+  return { valid, invalid };
+}
+
+// ============================================
 // HEALTH CHECK UTILITY
 // ============================================
 
@@ -357,6 +427,35 @@ export class DataScienceOrchestrator {
     const executionId = nanoid();
     const startTime = Date.now();
 
+    // Defense-in-depth: verify payment status before expensive computation
+    // Primary payment gate is in analysis-execution route; this is a safety net
+    try {
+      const [project] = await db.select({ isPaid: projects.isPaid })
+        .from(projects)
+        .where(eq(projects.id, request.projectId))
+        .limit(1);
+      if (project && project.isPaid === false) {
+        // Check journeyProgress for subscription/trial override
+        const [fullProject] = await db.select({ journeyProgress: projects.journeyProgress })
+          .from(projects)
+          .where(eq(projects.id, request.projectId))
+          .limit(1);
+        const jp = fullProject?.journeyProgress as any;
+        const hasSubscription = jp?.hasActiveSubscription === true;
+        const hasTrial = jp?.trialCreditsRemaining > 0;
+        if (!hasSubscription && !hasTrial) {
+          console.error(`❌ [DSOrchestrator] Payment required for project ${request.projectId} - rejecting execution`);
+          throw new Error('Payment required before analysis execution');
+        }
+      }
+    } catch (paymentError: any) {
+      if (paymentError.message === 'Payment required before analysis execution') {
+        throw paymentError;
+      }
+      // Non-payment errors (e.g., DB query failure) should not block execution
+      console.warn(`⚠️ [DSOrchestrator] Payment check failed (proceeding): ${paymentError.message}`);
+    }
+
     // Normalize questions and goals to prevent .toLowerCase() crashes
     const normalizedQuestions = normalizeQuestions(request.userQuestions);
     const normalizedGoals = normalizeQuestions(request.userGoals);
@@ -368,6 +467,18 @@ export class DataScienceOrchestrator {
     console.log(`🔬 [DataScienceOrchestrator] Starting workflow ${executionId}`);
     console.log(`⚙️ Compute Engine: ${computeEngine.toUpperCase()}`);
     console.log(`📊 Analysis types: ${request.analysisTypes.join(', ')}`);
+
+    // Validate analysis types against known Python script mappings
+    const { valid: validTypes, invalid: invalidTypes } = validateAnalysisTypes(request.analysisTypes);
+    if (invalidTypes.length > 0) {
+      console.warn(`⚠️ [DSOrchestrator] Skipping unrecognized analysis types: ${invalidTypes.join(', ')}`);
+    }
+    if (validTypes.length === 0) {
+      console.error(`❌ [DSOrchestrator] No valid analysis types found in: ${request.analysisTypes.join(', ')}`);
+      throw new Error(`No valid analysis types provided. Unrecognized types: ${invalidTypes.join(', ')}. Valid types include: descriptive, correlation, regression, clustering, time_series, comparative, text_analysis, group_analysis, classification.`);
+    }
+    request.analysisTypes = validTypes;
+
     console.log(`🏭 Industry: ${request.industry || 'general'}`);
     console.log(`❓ Questions: ${normalizedQuestions.length}`);
     console.log(`🎯 Goals: ${normalizedGoals.length}`);
@@ -3162,33 +3273,11 @@ export class DataScienceOrchestrator {
 
     scripts.add('descriptive_stats.py'); // Always used
 
-    if (analysisTypes.includes('correlation') || analysisTypes.includes('correlation_analysis')) {
-      scripts.add('correlation_analysis.py');
-    }
-    if (analysisTypes.includes('regression') || analysisTypes.includes('predictive') || analysisTypes.includes('predictive_modeling') || analysisTypes.includes('regression_analysis')) {
-      scripts.add('regression_analysis.py');
-    }
-    if (analysisTypes.includes('clustering') || analysisTypes.includes('segmentation') || analysisTypes.includes('clustering_analysis') || analysisTypes.includes('segmentation_analysis')) {
-      scripts.add('clustering_analysis.py');
-    }
-    if (analysisTypes.includes('classification') || analysisTypes.includes('classification_analysis')) {
-      scripts.add('classification_analysis.py');
-    }
-    if (analysisTypes.includes('ml') || analysisTypes.includes('machine-learning')) {
-      scripts.add('ml_training.py');
-    }
-    // FIX 2F: Add new analysis type script mappings
-    if (analysisTypes.includes('comparative') || analysisTypes.includes('comparative_analysis')) {
-      scripts.add('comparative_analysis.py');
-    }
-    if (analysisTypes.includes('group_analysis') || analysisTypes.includes('group')) {
-      scripts.add('group_analysis.py');
-    }
-    if (analysisTypes.includes('text_analysis') || analysisTypes.includes('text')) {
-      scripts.add('text_analysis.py');
-    }
-    if (analysisTypes.includes('time_series') || analysisTypes.includes('time-series') || analysisTypes.includes('time_series_analysis') || analysisTypes.includes('trend') || analysisTypes.includes('trend_analysis')) {
-      scripts.add('time_series_analysis.py');
+    for (const t of analysisTypes) {
+      const script = ANALYSIS_TYPE_SCRIPT_MAP[t.toLowerCase().trim()];
+      if (script) {
+        scripts.add(script);
+      }
     }
 
     scripts.add('statistical_tests.py'); // General hypothesis testing
