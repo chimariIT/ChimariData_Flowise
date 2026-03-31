@@ -118,7 +118,7 @@ def upgrade() -> None:
         sa.Column('session_id', sa.String(36), sa.ForeignKey('sessions.id')),
         sa.Column('analysis_type', sa.String(50)),
         sa.Column('data', sa.JSON()),
-        sa.Column('data_metadata', sa.JSON(), name='metadata'),
+        sa.Column('metadata', sa.JSON()),
         sa.Column('status', sa.String(20), default='pending'),
         sa.Column('error', sa.Text()),
         sa.Column('started_at', sa.DateTime(timezone=False), server_default=sa.text('CURRENT_TIMESTAMP')),
@@ -155,7 +155,7 @@ def upgrade() -> None:
         sa.Column('target_id', sa.String(64)),
         sa.Column('link_type', sa.String(50)),
         sa.Column('confidence', sa.Float()),
-        sa.Column('data_metadata', sa.JSON(), name='metadata'),
+        sa.Column('metadata', sa.JSON()),
         sa.Column('created_at', sa.DateTime(timezone=False), server_default=sa.text('CURRENT_TIMESTAMP')),
     )
 
@@ -168,7 +168,7 @@ def upgrade() -> None:
         sa.Column('type', sa.String(20)),
         sa.Column('file_path', sa.Text()),
         sa.Column('file_size', sa.BigInteger()),
-        sa.Column('data_metadata', sa.JSON(), name='metadata'),
+        sa.Column('metadata', sa.JSON()),
         sa.Column('download_count', sa.Integer(), default=0),
         sa.Column('created_at', sa.DateTime(timezone=False), server_default=sa.text('CURRENT_TIMESTAMP')),
     )
