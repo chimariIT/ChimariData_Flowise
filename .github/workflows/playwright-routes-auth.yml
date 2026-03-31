@@ -8,6 +8,30 @@ on:
 jobs:
   e2e:
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: chimaridata_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/chimaridata_test
+      SESSION_SECRET: ci-test-session-secret-not-for-production
+      JWT_SECRET: ci-test-jwt-secret-not-for-production
+      NODE_ENV: development
+      ENABLE_MOCK_MODE: "true"
+      REDIS_ENABLED: "false"
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -20,6 +44,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Push database schema
+        run: npm run db:push
 
       - name: Build app
         run: npm run build
