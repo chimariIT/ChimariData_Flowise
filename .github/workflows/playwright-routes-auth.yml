@@ -63,6 +63,7 @@ jobs:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/chimaridata_test
           JWT_SECRET: ci-test-jwt-secret-not-for-production
           ALLOWED_ORIGINS: "http://localhost:5173"
+          OPENAI_API_KEY: "sk-ci-dummy-key-not-for-real-use"
         run: |
           nohup uvicorn src.main:app --host 0.0.0.0 --port 8000 &
           echo "Waiting for Python backend..."
