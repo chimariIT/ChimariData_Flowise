@@ -31,6 +31,8 @@ jobs:
       NODE_ENV: development
       ENABLE_MOCK_MODE: "true"
       REDIS_ENABLED: "false"
+      PYTHON_HEALTH_OPTIONAL: "true"
+      SPARK_ENABLED: "false"
 
     steps:
       - name: Checkout repository
