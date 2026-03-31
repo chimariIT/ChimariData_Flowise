@@ -11,7 +11,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -25,17 +25,15 @@ jobs:
           --health-retries 5
 
     env:
+      # Node.js frontend env
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/chimaridata_test
       SESSION_SECRET: ci-test-session-secret-not-for-production
       JWT_SECRET: ci-test-jwt-secret-not-for-production
       NODE_ENV: development
-      ENABLE_MOCK_MODE: "true"
-      REDIS_ENABLED: "false"
-      PYTHON_HEALTH_OPTIONAL: "true"
-      SPARK_ENABLED: "false"
+      VITE_USE_PYTHON_BACKEND: "true"
 
     steps:
-      - name: Checkout repository
+      - name: Checkout frontend repository
         uses: actions/checkout@v4
 
       - name: Setup Node.js
@@ -44,13 +42,53 @@ jobs:
           node-version: 20
           cache: 'npm'
 
-      - name: Install dependencies
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Clone Python backend
+        uses: actions/checkout@v4
+        with:
+          repository: chimariIT/chimaridata-python-backend
+          path: python-backend
+
+      - name: Install Python backend dependencies
+        working-directory: python-backend
+        run: pip install -r requirements.txt
+
+      - name: Run Python backend migrations
+        working-directory: python-backend
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/chimaridata_test
+        run: alembic upgrade head
+
+      - name: Start Python backend
+        working-directory: python-backend
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/chimaridata_test
+          JWT_SECRET: ci-test-jwt-secret-not-for-production
+          ALLOWED_ORIGINS: "http://localhost:5173"
+        run: |
+          nohup uvicorn src.main:app --host 0.0.0.0 --port 8000 &
+          echo "Waiting for Python backend..."
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+              echo "Python backend is ready!"
+              break
+            fi
+            echo "Attempt $i/30..."
+            sleep 3
+          done
+          curl -sf http://localhost:8000/health || (echo "Python backend failed to start" && exit 1)
+
+      - name: Install frontend dependencies
         run: npm ci
 
-      - name: Push database schema
+      - name: Push frontend database schema
         run: npm run db:push
 
-      - name: Build app
+      - name: Build frontend
         run: npm run build
 
       - name: Install Playwright Browsers
@@ -59,6 +97,7 @@ jobs:
       - name: Run authenticated routes tests (serial)
         env:
           CI: true
+          PLAYWRIGHT_SKIP_WEBSERVER: "0"
         run: npm run test:routes-auth-serial
 
       - name: Upload Playwright report

@@ -38,7 +38,7 @@ const baseConfig = defineConfig({
   /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */
   use: {
     /* Base URL to use in actions like `await page.goto('/')`. */
-    baseURL: 'http://localhost:5000',
+    baseURL: 'http://localhost:5173',
 
     /* Collect trace when retrying the failed test. See https://playwright.dev/docs/trace-viewer */
     trace: 'on-first-retry',
@@ -91,24 +91,23 @@ const baseConfig = defineConfig({
     // },
   ],
 
-  /* Run your local dev server before starting the tests */
-  /* 
-   * Architecture: The app uses TWO servers:
-   * - Frontend (Vite): http://localhost:5173 (client app)
-   * - Backend (Express): http://localhost:5000 (API server)
-   * 
-   * The webServer runs 'npm run dev' which starts both via concurrently.
-   * We check the backend health endpoint to ensure both servers are ready,
-   * since the backend is critical for API calls (auth, data, etc.).
+  /* Run the frontend dev server before starting the tests.
+   *
+   * Architecture:
+   * - Frontend (Vite): http://localhost:5173 — proxies /api/* to Python backend
+   * - Backend (Python FastAPI): http://localhost:8000 — started separately (in CI or manually)
+   *
+   * The webServer starts only the frontend. The Python backend must already be running.
+   * In CI, the workflow starts the Python backend before Playwright runs.
    */
   ...(skipWebServer
     ? {}
     : {
         webServer: {
-          command: 'npm run dev',
-          url: 'http://localhost:5000/api/health', // Check backend health endpoint (requires both servers)
-          reuseExistingServer: true,  // Always reuse to avoid conflicts
-          timeout: 240 * 1000, // 4 minutes for both servers to start
+          command: 'npm run dev:frontend',
+          url: 'http://localhost:5173',
+          reuseExistingServer: true,
+          timeout: 120 * 1000,
           stdout: 'pipe',
           stderr: 'pipe',
         },
