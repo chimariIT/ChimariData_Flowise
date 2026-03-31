@@ -22,8 +22,12 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     """Upgrade database to this revision."""
 
-    # Enable pgvector extension
-    op.execute('CREATE EXTENSION IF NOT EXISTS pgvector')
+    # Enable pgvector extension (optional — gracefully skip if not available)
+    try:
+        op.execute('CREATE EXTENSION IF NOT EXISTS vector')
+    except Exception:
+        import warnings
+        warnings.warn("pgvector extension not available — vector columns will not work")
 
     # ============================================================================
     # Core Tables
