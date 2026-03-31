@@ -109,6 +109,18 @@ def upgrade() -> None:
         sa.Column('completed_at', sa.DateTime(timezone=False)),
     )
 
+    # Sessions table (must be created before tables that reference it)
+    op.create_table(
+        'sessions',
+        sa.Column('id', sa.String(36), primary_key=True),
+        sa.Column('user_id', sa.String(36), sa.ForeignKey('users.id'), nullable=False),
+        sa.Column('project_id', sa.String(36), sa.ForeignKey('projects.id'), nullable=False),
+        sa.Column('current_step', sa.String(50)),
+        sa.Column('state', sa.JSON()),
+        sa.Column('created_at', sa.DateTime(timezone=False), server_default=sa.text('CURRENT_TIMESTAMP')),
+        sa.Column('updated_at', sa.DateTime(timezone=False), server_default=sa.text('CURRENT_TIMESTAMP'), onupdate=sa.text('CURRENT_TIMESTAMP')),
+    )
+
     # Analysis results table
     op.create_table(
         'analysis_results',
@@ -171,18 +183,6 @@ def upgrade() -> None:
         sa.Column('metadata', sa.JSON()),
         sa.Column('download_count', sa.Integer(), default=0),
         sa.Column('created_at', sa.DateTime(timezone=False), server_default=sa.text('CURRENT_TIMESTAMP')),
-    )
-
-    # Sessions table
-    op.create_table(
-        'sessions',
-        sa.Column('id', sa.String(36), primary_key=True),
-        sa.Column('user_id', sa.String(36), sa.ForeignKey('users.id'), nullable=False),
-        sa.Column('project_id', sa.String(36), sa.ForeignKey('projects.id'), nullable=False),
-        sa.Column('current_step', sa.String(50)),
-        sa.Column('state', sa.JSON()),
-        sa.Column('created_at', sa.DateTime(timezone=False), server_default=sa.text('CURRENT_TIMESTAMP')),
-        sa.Column('updated_at', sa.DateTime(timezone=False), server_default=sa.text('CURRENT_TIMESTAMP'), onupdate=sa.text('CURRENT_TIMESTAMP')),
     )
 
     # Business definitions table
@@ -280,7 +280,7 @@ def upgrade() -> None:
         sa.Column('updated_at', sa.DateTime(timezone=False), server_default=sa.text('CURRENT_TIMESTAMP'), onupdate=sa.text('CURRENT_TIMESTAMP')),
         sa.Column('created_by', sa.String(36), sa.ForeignKey('users.id')),
         sa.Column('is_system', sa.Boolean(), default=False),
-        sa.Column('data_metadata', sa.JSON(), name='metadata', default={}),
+        sa.Column('metadata', sa.JSON(), default={}),
     )
 
     # Knowledge edges table
