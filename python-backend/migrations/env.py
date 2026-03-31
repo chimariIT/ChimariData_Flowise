@@ -96,11 +96,8 @@ def do_run_migrations(connection: Connection) -> None:
     # Configure connection
     context.configure(connection=connection, target_metadata=target_metadata)
 
-    try:
-        with context.begin_transaction():
-            context.run_migrations()
-    finally:
-        connection.close()
+    with context.begin_transaction():
+        context.run_migrations()
 
 
 async def run_async_migrations() -> None:
@@ -109,7 +106,7 @@ async def run_async_migrations() -> None:
 
     # For async migrations, we use a custom run_migrations function
     async with connectable.connect() as connection:
-        await connection.run_sync(do_run_migrations, connection)
+        await connection.run_sync(do_run_migrations)
 
 
 async def run_migrations_online() -> None:
