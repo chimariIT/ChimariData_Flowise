@@ -1,0 +1,23 @@
+# Chimaridata Python Backend - Development Requirements
+# Install all core dependencies plus development tools
+# Install with: pip install -r requirements-dev.txt
+
+-r requirements.txt
+
+# ============================================================================
+# Development Tools
+# ============================================================================
+pytest>=7.4.3
+pytest-cov>=4.1.0
+pytest-asyncio>=0.21.0
+pytest-timeout>=2.1.0
+black>=23.12.0
+ruff>=0.1.9
+mypy>=1.7.0
+
+# ============================================================================
+# Optional: PII Detection (requires Python <3.14)
+# ============================================================================
+# Uncomment to enable PII detection with Presidio/spacy
+# presidio>=2.2.295
+# spacy>=3.7.0,<3.9.0

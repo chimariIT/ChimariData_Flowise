@@ -47,12 +47,6 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Clone Python backend
-        uses: actions/checkout@v4
-        with:
-          repository: chimariIT/chimaridata-python-backend
-          path: python-backend
-
       - name: Install Python backend dependencies
         working-directory: python-backend
         run: pip install -r requirements.txt

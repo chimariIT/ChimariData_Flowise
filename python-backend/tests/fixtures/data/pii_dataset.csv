@@ -1,0 +1,51 @@
+customer_id,full_name,email,phone_number,ssn,address,city,state,zip_code,credit_card,ip_address,birth_date
+1,John Smith,john.smith@gmail.com,555-123-4567,123-45-6789,123 Main St,New York,NY,10001,4532-1234-5678-8901,192.168.1.1,1985-05-15
+2,Emma Johnson,emma.johnson@yahoo.com,(555) 234-5678,987-65-4321,456 Oak Ave,Los Angeles,CA,90001,5421-9876-5432-1098-7654,10.0.0.5,1990-08-22
+3,Michael Chen,m.chen@hotmail.com,555.345.6789,456-78-9012,789 Pine Rd,Chicago,IL,60601,6011-1111-2222-3333-4444,172.16.0.1,1978-12-10
+4,Sarah Williams,sarah.williams@outlook.com,1-555-456-7890,321-54-9876,321 Elm St,Houston,TX,77001,3712-3456-7890-1234-5678,192.168.2.1,1992-03-18
+5,David Brown,d.brown@company.com,555-567-8901,654-32-1098,654 Maple Dr,Phoenix,AZ,85001,4111-2222-3333-4444-5555,198.51.100.2,1980-07-25
+6,Lisa Anderson,lisa.anderson@gmail.com,(555) 678-9012,789-01-2345,987 Cedar Ln,Philadelphia,PA,19101,5012-3456-7890-1122-3344,10.1.1.1,1988-11-30
+7,James Taylor,james.taylor@yahoo.com,555.789.0123,012-34-5678,123 Birch Way,San Diego,CA,92101,6011-1234-5678-9012-3456,172.20.1.1,1975-04-12
+8,Emily Martinez,emily.martinez@outlook.com,1-555-890-1234,234-56-7890,456 Willow Ct,Dallas,TX,75201,3723-4567-8901-2233-4455,166.122.3.4,1983-09-05
+9,Robert Garcia,bob.garcia@company.org,555.901.2345,345-67-8901,234 Aspen Dr,San Jose,CA,95101,4124-5678-9012-3344-5566,192.168.100.1,1977-01-20
+10,Jennifer Davis,jennifer.davis@gmail.com,(555) 012-3456,567-89-0123,890 Pine St,Austin,TX,78701,5025-6789-0123-4455-6677,172.31.255.1,1986-06-15
+11,William Rodriguez,william.r@hotmail.com,555.123.4567,890-12-3456,567 Oak Ave,Jacksonville,FL,32201,6012-7890-1234-5566-7788,10.0.0.25,1979-02-28
+12,Amanda Hernandez,amanda.h@yahoo.com,1-555-234-5678,123-45-6789,1234 Elm Rd,Baltimore,MD,21201,3734-5678-9012-6677-8899,198.51.100.25,1991-05-08
+13,Christopher Lopez,chris.lopez@outlook.com,555.345.6789,456-78-9012,345 Maple St,Miami,FL,33101,4244-6789-0123-7788-8900,172.16.254.1,1974-11-22
+14,Jessica Gonzalez,jessica.g@gmail.com,(555) 456-7890,789-01-2345,6789 Pine Ln,Orlando,FL,32801,5353-8901-2345-8901-1122,166.122.8.9,1989-04-30
+15,Daniel Wilson,daniel.w@company.com,555.567.8901,012-34-5678,9012 Oak Dr,Tampa,FL,33601,5454-9012-3456-2233-4455,192.168.50.50,1976-08-14
+16,Maria Anderson,maria.anderson@yahoo.com,1-555-678-9012,234-56-7890,234 Birch Way,Houston,TX,77002,4111-2345-6789-5566-7788,10.10.10.10,1993-10-25
+17,Matthew Thomas,matt.thomas@outlook.com,555.789.0123,345-67-8901,5678 Cedar Ln,San Antonio,TX,78201,6012-3456-7890-3344-5566,172.20.40.60,1980-03-03
+18,Sophia Moore,sophia.m@gmail.com,(555) 890-1234,567-89-0123,890 Willow Ct,Dallas,TX,75202,3737-4567-8901-4455-6677,198.51.200.200,1987-12-12
+19,Andrew Jackson,andrew.jackson@company.org,555.901.2345,890-12-3456,1234 Aspen Dr,San Diego,CA,92102,4244-5678-9012-5566-8899,172.31.40.50,1972-06-19
+20,Olivia White,olivia.white@yahoo.com,1-555-012-3456,012-34-5678,345 Maple St,San Jose,CA,95102,5025-6789-0123-6677-8899,166.100.80.90,1994-04-05
+21,Joshua Harris,josh.harris@outlook.com,555.123.4567,123-45-6789,654 Oak Ave,Phoenix,AZ,85002,5353-8901-2345-7788-8900,192.168.1.100,1978-08-08
+22,Abigail Martin,abigail.m@gmail.com,(555) 234-5678,456-78-9012,987 Cedar Ln,Philadelphia,PA,19102,6011-1234-5678-8901-2233-4455,10.20.20.20,1985-02-14
+23,Joseph Thompson,joe.thompson@company.com,555.345.6789,789-01-2345,321 Elm St,Baltimore,MD,21202,3734-5678-9012-3344-5566,198.51.150.150,1971-11-30
+24,Emily Garcia,emily.garcia@yahoo.com,1-555-456-7890,234-56-7890,456 Willow Ct,Miami,FL,33102,4244-6789-0123-4455-6677,172.16.32.64,1992-07-22
+25,Alexander Martinez,alex.martinez@outlook.com,555.567.8901,012-34-5678,123 Birch Way,Orlando,FL,32802,5454-9012-3456-5566-7788,192.168.2.2,1979-09-18
+26,Samantha Robinson,samantha.r@company.com,555.678.9012,890-12-3456,890 Pine St,Austin,TX,78702,6012-3456-7890-2233-4455,166.122.64.64,1986-03-27
+27,Nathan Clark,nathan.clark@gmail.com,(555) 789-0123,345-67-8901,234 Aspen Dr,Jacksonville,FL,32202,5025-6789-0123-6677-8899,10.0.0.128,1973-05-12
+28,Elizabeth Rodriguez,elizabeth.r@yahoo.com,1-555-890-1234,567-89-0123,345 Maple Rd,Tampa,FL,33602,5353-8901-2345-7788-8900,172.20.60.80,1990-10-10
+29,Brandon Lewis,brandon.lewis@outlook.com,555.012-3456,012-34-5678,5678 Cedar Ln,San Antonio,TX,78202,6012-3456-7890-3344-5566,198.51.180.180,1975-01-25
+30,Stephanie Lee,stephanie.lee@company.org,555.123.4567,123-45-6789,987 Cedar Ln,Los Angeles,CA,90002,3737-4567-8901-4455-6677,166.122.100.100,1988-06-30
+31,Kevin Walker,kwalker@gmail.com,(555) 345-6789,789-01-2345,654 Maple Dr,San Diego,CA,92103,5025-6789-0123-5566-7788,192.168.20.20,1982-04-17
+32,Nancy Hall,nancy.hall@yahoo.com,1-555-456-7890,234-56-7890,321 Elm St,Phoenix,AZ,85003,6011-1234-5678-8901-2233-4455,10.10.0.30,1991-08-05
+33,Stephen Allen,stephen.allen@outlook.com,555.567.8901,012-34-5678,234 Birch Way,Houston,TX,77002,5454-9012-3456-2233-4455,198.51.220.220,1976-02-09
+34,Megan Young,megan.young@company.com,555.678.9012,890-12-3456,456 Willow Ct,Dallas,TX,75202,3734-5678-9012-3344-5566,172.16.128.128,1989-12-01
+35,Donald King,dking@hotmail.com,1-555-789-0123,567-89-0123,890 Aspen Dr,Miami,FL,33103,6012-3456-7890-4455-6677,166.122.40.40,1980-05-23
+36,Michelle Wright,michelle.wright@yahoo.com,(555) 890-1234,345-67-8901,123 Pine St,Orlando,FL,32803,5025-6789-0123-7788-8900,192.168.30.30,1993-03-15
+37,Edward Scott,edward.scott@outlook.com,555.012-3456,012-34-5678,654 Oak Ave,Tampa,FL,33603,5353-8901-2345-5566-7788,10.20.20.30,1977-07-08
+38,Laura Torres,laura.torres@company.com,555.123.4567,123-45-6789,987 Cedar Ln,Jacksonville,FL,32203,6011-1234-5678-2233-4455,172.20.50.50,1985-09-20
+39,George Nguyen,george.nguyen@gmail.com,1-555-234-5678,456-78-9012,321 Elm St,San Antonio,TX,78203,5025-6789-0123-6677-8899,198.51.60.60,1974-11-05
+40,Diane Hill,diane.hill@yahoo.com,(555) 345-6789,789-01-2345,234 Aspen Dr,Phoenix,AZ,85004,5454-9012-3456-7788-8900,166.122.70.70,1992-02-28
+41,Sean Flores,sean.f@outlook.com,555.456-7890,890-12-3456,5678 Cedar Ln,Houston,TX,77003,6012-3456-7890-3344-5566,192.168.40.40,1979-06-12
+42,Rebecca Rivera,r.rivera@company.com,1-555-567-8901,567-89-0123,890 Pine St,Dallas,TX,75203,3734-5678-9012-4455-6677,172.16.80.80,1986-04-25
+43,Timothy Cook,tcook@yahoo.com,(555) 678-9012,012-34-5678,456 Willow Ct,San Diego,CA,92104,5025-6789-0123-7788-8900,192.168.50.50,1981-08-18
+44,Julia Roberts,jroberts@outlook.com,555.789.0123,123-45-6789,345 Maple Rd,Los Angeles,CA,90002,5353-8901-2345-5566-7788,10.10.10.50,1984-01-30
+45,Gregory Morgan,greg.m@company.com,1-555-890-1234,890-12-3456,987 Cedar Ln,Philadelphia,PA,19103,6011-1234-5678-8901-2233-4455,172.20.70.70,1983-05-14
+46,Kate Cooper,kcooper@gmail.com,(555) 012-3456,456-78-9012,123 Birch Way,Baltimore,MD,21203,5025-6789-0123-6677-8899,198.51.80.80,1990-09-08
+47,Dennis Richardson,dennis.r@outlook.com,555.123.4567,567-89-0123,654 Maple Dr,Miami,FL,33104,5454-9012-3456-2233-4455,166.122.90.90,1978-02-22
+48,Sharon Cox,scox@yahoo.com,1-555-234-5678,012-34-5678,234 Elm Rd,Orlando,FL,32804,6012-3456-7890-4455-6677,192.168.60.60,1987-11-02
+49,James Ward,jward@company.com,555.345.6789,789-01-2345,890 Oak Dr,Tampa,FL,33604,3737-4567-8901-3344-5566,172.16.100.100,1975-04-05
+50,Victoria Peterson,vpeterson@outlook.com,(555) 456-7890,345-67-8901,567 Oak Ave,Jacksonville,FL,32205,5025-6789-0123-7788-8900,10.20.20.50,1992-07-30

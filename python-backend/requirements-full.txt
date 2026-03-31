@@ -1,0 +1,20 @@
+# Chimaridata Python Backend - Full Development Requirements
+# Install this for complete testing including Stripe and PII detection
+#
+# NOTE: PII detection (spacy/presidio) requires Python <3.14
+# If you're on Python 3.14, those packages will be skipped
+
+-r requirements.txt
+
+# ============================================================================
+# Payment Processing (Stripe)
+# ============================================================================
+stripe>=7.0.0
+
+# ============================================================================
+# PII Detection (Presidio/Spacy) - Python <3.14 ONLY
+# ============================================================================
+# Uncomment these if using Python 3.11 or 3.12:
+# presidio>=2.2.295
+# spacy>=3.7.0,<3.9.0
+# en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
