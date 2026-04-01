@@ -95,6 +95,12 @@ app.use((req, res, next) => {
 
 let server: Server;
 
+// Module-level export for initialization state (populated inside IIFE)
+let _initializationState: any = null;
+export function getInitializationState() {
+  return _initializationState || (global as any).getInitializationState?.();
+}
+
 (async () => {
   // ========================================
   // PRODUCTION READINESS VALIDATION
@@ -283,13 +289,9 @@ let server: Server;
     }
   }
 
-  // Export initialization state for admin endpoint
-  export function getInitializationState() {
-    return initializationState;
-  }
-
-  // Make it available globally
-  (global as any).getInitializationState = getInitializationState;
+  // Make initialization state available globally and via module export
+  _initializationState = initializationState;
+  (global as any).getInitializationState = () => initializationState;
 
   // ========================================
   // START SERVER
@@ -339,7 +341,7 @@ let server: Server;
     const { projects: projectsTable } = await import('@shared/schema');
     const { eq, and, isNotNull } = await import('drizzle-orm');
     const [dbInstance] = await Promise.all([
-      import('../db'),
+      import('./db'),
       import('@shared/schema')
     ]);
 
