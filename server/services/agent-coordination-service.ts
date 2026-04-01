@@ -178,46 +178,43 @@ interface SLAMetrics {
 }
 
 /**
- * Execute a promise with soft timeout enforcement
- * - Logs warning if timeout exceeded, but continues execution
- * - Does NOT cancel the operation (soft enforcement)
- * - Returns both the result and timing metrics
+ * Execute a promise with two-tier timeout enforcement:
+ * - Soft timeout at `timeoutMs`: logs warning, continues waiting
+ * - Hard timeout at 2x `timeoutMs`: rejects and uses fallback
+ * Returns both the result and timing metrics.
  */
 async function withSoftTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
-  phaseName: string
+  phaseName: string,
+  fallback?: T
 ): Promise<{ result: T; metrics: SLAMetrics }> {
   const startTime = Date.now();
   let timedOut = false;
-  let timeoutId: NodeJS.Timeout | null = null;
+  let softTimeoutId: NodeJS.Timeout | null = null;
+  let hardTimeoutId: NodeJS.Timeout | null = null;
 
-  // Set up warning timeout (soft enforcement - just logs)
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeoutId = setTimeout(() => {
-      timedOut = true;
-      console.warn(`⚠️ [SLA] Phase "${phaseName}" exceeded ${timeoutMs}ms timeout - continuing execution`);
-    }, timeoutMs);
+  // Soft timeout: warning only
+  softTimeoutId = setTimeout(() => {
+    timedOut = true;
+    console.warn(`⚠️ [SLA] Phase "${phaseName}" exceeded ${timeoutMs}ms soft timeout - still waiting...`);
+  }, timeoutMs);
+
+  // Hard timeout: reject with fallback at 2x the soft limit
+  const hardTimeoutMs = timeoutMs * 2;
+  const hardTimeoutPromise = new Promise<T>((resolve, reject) => {
+    hardTimeoutId = setTimeout(() => {
+      if (fallback !== undefined) {
+        console.error(`❌ [SLA] Phase "${phaseName}" HARD TIMEOUT after ${hardTimeoutMs}ms - using fallback`);
+        resolve(fallback);
+      } else {
+        reject(new Error(`Phase "${phaseName}" hard timeout after ${hardTimeoutMs}ms`));
+      }
+    }, hardTimeoutMs);
   });
 
   try {
-    // Race between the actual promise and timeout warning
-    // Note: We use Promise.race only for logging, not for cancellation
-    const result = await Promise.race([
-      promise.then(r => ({ type: 'result' as const, value: r })),
-      timeoutPromise.catch(() => ({ type: 'timeout' as const })) as any
-    ]).catch(async () => {
-      // If race fails, still wait for actual result
-      return { type: 'result' as const, value: await promise };
-    });
-
-    // Always wait for actual result if we got timeout first
-    let actualResult: T;
-    if (result.type === 'timeout') {
-      actualResult = await promise;
-    } else {
-      actualResult = result.value;
-    }
+    const actualResult = await Promise.race([promise, hardTimeoutPromise]);
 
     const durationMs = Date.now() - startTime;
     const withinSLA = durationMs <= timeoutMs;
@@ -238,9 +235,8 @@ async function withSoftTimeout<T>(
       }
     };
   } finally {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
+    if (softTimeoutId) clearTimeout(softTimeoutId);
+    if (hardTimeoutId) clearTimeout(hardTimeoutId);
   }
 }
 
@@ -333,7 +329,8 @@ export class AgentCoordinationService {
       const { result: deResult, metrics: deMetrics } = await withSoftTimeout(
         this.runDataEngineerPhase(request),
         PHASE_TIMEOUTS.data_engineer,
-        'data_engineer'
+        'data_engineer',
+        { phase: 'data_engineer', status: 'failed' as const, summary: 'Data Engineer phase timed out' }
       );
       deResult.slaMetrics = deMetrics;
       slaMetrics.push(deMetrics);
@@ -390,7 +387,8 @@ export class AgentCoordinationService {
       const { result: dsResult, metrics: dsMetrics } = await withSoftTimeout(
         this.runDataScientistPhase(request, deResult.resultId),
         PHASE_TIMEOUTS.data_scientist,
-        'data_scientist'
+        'data_scientist',
+        { phase: 'data_scientist', status: 'failed' as const, summary: 'Data Scientist phase timed out' }
       );
       dsResult.slaMetrics = dsMetrics;
       slaMetrics.push(dsMetrics);
@@ -447,7 +445,8 @@ export class AgentCoordinationService {
       const { result: baResult, metrics: baMetrics } = await withSoftTimeout(
         this.runBusinessAgentPhase(request, deResult.resultId, dsResult.resultId),
         PHASE_TIMEOUTS.business_agent,
-        'business_agent'
+        'business_agent',
+        { phase: 'business_agent', status: 'failed' as const, summary: 'Business Agent phase timed out' }
       );
       baResult.slaMetrics = baMetrics;
       slaMetrics.push(baMetrics);
@@ -492,7 +491,8 @@ export class AgentCoordinationService {
       const { result: synthesisResult, metrics: synthMetrics } = await withSoftTimeout(
         this.runSynthesisPhase(request, [deResult, dsResult, baResult]),
         PHASE_TIMEOUTS.synthesis,
-        'synthesis'
+        'synthesis',
+        { phase: 'synthesis', status: 'failed' as const, summary: 'Synthesis phase timed out' }
       );
       synthesisResult.slaMetrics = synthMetrics;
       slaMetrics.push(synthMetrics);
@@ -538,7 +538,8 @@ export class AgentCoordinationService {
       const { result: checkpointResult, metrics: checkpointMetrics } = await withSoftTimeout(
         this.createApprovalCheckpoint(request, synthesisResult.resultId!),
         PHASE_TIMEOUTS.checkpoint,
-        'checkpoint'
+        'checkpoint',
+        { phase: 'checkpoint', status: 'failed' as const, summary: 'Checkpoint creation timed out' }
       );
       checkpointResult.slaMetrics = checkpointMetrics;
       slaMetrics.push(checkpointMetrics);

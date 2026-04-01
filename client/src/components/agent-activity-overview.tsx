@@ -295,7 +295,7 @@ export default function AgentActivityOverview({ project, journeyState, onNavigat
 
   const expertOpinions = coordination?.expertOpinions ?? [];
 
-  const currentStepName = journeyState?.currentStep?.name ?? "Intake";
+  const currentStepDisplayName = journeyState?.currentStep?.name ?? "Intake";
   const nextRecommendation = actionableRecommendations[0];
   const estimatedTimeline = coordination?.synthesis?.estimatedTimeline ?? journeyState?.estimatedTimeRemaining;
 
@@ -315,7 +315,7 @@ export default function AgentActivityOverview({ project, journeyState, onNavigat
           <div className="grid gap-4 md:grid-cols-3">
             <div>
               <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Current focus</p>
-              <p className="text-sm font-semibold text-gray-900 mt-1">{currentStepName}</p>
+              <p className="text-sm font-semibold text-gray-900 mt-1">{currentStepDisplayName}</p>
               {estimatedTimeline && (journeyState as any)?.status !== 'completed' && (
                 <p className="text-xs text-gray-500 mt-1 flex items-center gap-1">
                   <Clock className="w-3 h-3" />

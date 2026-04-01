@@ -19,7 +19,8 @@ import {
   MessageCircle,
   Lightbulb,
   Beaker,
-  RefreshCw
+  RefreshCw,
+  Loader2
 } from "lucide-react";
 import PrepareStep from "@/pages/prepare-step";
 import DataUploadStep from "@/pages/data-upload-step";
@@ -47,6 +48,7 @@ interface JourneyWizardProps {
 
 export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps) {
   const [, setLocation] = useLocation();
+  const [transitioning, setTransitioning] = useState(false);
 
   // User Journey Flow (8 steps - CONSOLIDATED):
   // 1. Data Upload & Project Setup -> 2. Analysis Preparation -> 3. Data Verification ->
@@ -150,15 +152,19 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
 
   const handleNext = () => {
     if (currentStepIndex < steps.length - 1) {
+      setTransitioning(true);
       const nextStep = steps[currentStepIndex + 1];
       setLocation(nextStep.route);
+      setTimeout(() => setTransitioning(false), 300);
     }
   };
 
   const handlePrevious = () => {
     if (currentStepIndex > 0) {
+      setTransitioning(true);
       const prevStep = steps[currentStepIndex - 1];
       setLocation(prevStep.route);
+      setTimeout(() => setTransitioning(false), 300);
     }
   };
 
@@ -352,7 +358,12 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
         )}
 
         {/* Render step-specific content based on currentStage */}
-        <div className="step-content">
+        <div className="step-content relative">
+          {transitioning && (
+            <div className="absolute inset-0 bg-white/60 flex items-center justify-center z-10 rounded-lg">
+              <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
+            </div>
+          )}
           {currentStage === 'prepare' && (
             <Card data-testid="card-step-content">
               <CardHeader>
