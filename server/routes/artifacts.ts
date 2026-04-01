@@ -162,7 +162,22 @@ router.get('/projects/:projectId/artifacts/status',
         });
       }
 
-      // Get artifact counts by status
+      // EX-2 FIX: Get artifact generation status from projects table (authoritative)
+      const [project] = await db
+        .select({ artifactGenerationStatus: projects.artifactGenerationStatus })
+        .from(projects)
+        .where(eq(projects.id, projectId))
+        .limit(1);
+
+      if (project?.artifactGenerationStatus) {
+        // Use authoritative status from projects table
+        return res.json({
+          success: true,
+          ...project.artifactGenerationStatus
+        });
+      }
+
+      // Fallback: Get artifact counts by status (for projects without artifactGenerationStatus)
       const artifacts = await db
         .select({
           id: projectArtifacts.id,

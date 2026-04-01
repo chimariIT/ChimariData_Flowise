@@ -19,6 +19,7 @@ import { ArtifactGenerator } from '../services/artifact-generator';
 import { storage } from '../storage';
 import { JourneyStateManager } from '../services/journey-state-manager';
 import { getPiiExcludedColumns, getPiiConfig } from '../services/pii-helper';
+import { extractDatasetRows } from '../services/analysis-data-helpers';
 import { getBillingService } from '../services/billing/unified-billing-service';
 import { requireAnyFeature, GATED_FEATURES } from '../middleware/feature-gate';
 import type { CostBreakdown } from '@shared/schema';
@@ -459,6 +460,31 @@ router.post('/execute', ensureAuthenticated, async (req, res) => {
       setImmediate(async () => {
         try {
           const artifactGenerator = new ArtifactGenerator();
+          const columnsToExclude = new Set(piiConfig.excludedColumns || []);
+
+          let datasetRowsForArtifacts: any[] = [];
+          try {
+            const datasets = await storage.getProjectDatasets(projectId);
+            if (Array.isArray(datasets)) {
+              for (const dataset of datasets) {
+                try {
+                  const rows = extractDatasetRows(dataset, columnsToExclude);
+                  if (Array.isArray(rows) && rows.length > 0) {
+                    datasetRowsForArtifacts = rows;
+                    break;
+                  }
+                } catch (rowError) {
+                  console.warn(`⚠️ [Artifacts] Failed to extract rows for dataset ${dataset?.id || 'unknown'}:`, rowError);
+                }
+              }
+            }
+          } catch (datasetError) {
+            console.warn('⚠️ [Artifacts] Failed to load project datasets for export:', datasetError);
+          }
+
+          if (datasetRowsForArtifacts.length === 0) {
+            console.warn('⚠️ [Artifacts] No dataset rows available for CSV/JSON export; falling back to insights');
+          }
 
           // Build comprehensiveResults from analysis output to populate Q&A in artifacts
           const comprehensiveResults: any = {
@@ -540,6 +566,7 @@ router.post('/execute', ensureAuthenticated, async (req, res) => {
             userId,
             journeyType: (project.journeyType || 'non-tech') as 'non-tech' | 'business' | 'technical' | 'consultation',
             analysisResults: results.insights || [], // Pass insights as analysis results
+            dataRows: datasetRowsForArtifacts,
             visualizations: results.visualizations || [],
             insights: (results.insights || []).map(insight => insight.title), // Convert AnalysisInsight[] to string[]
             datasetSizeMB: project.data ? (JSON.stringify(project.data).length / (1024 * 1024)) : 0,

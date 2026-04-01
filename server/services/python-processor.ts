@@ -182,6 +182,7 @@ export const PythonProcessor = {
       success: true,
       analysisTypes,
       results,
+      data: results,
       errors: errors.length > 0 ? errors : undefined,
       timestamp: new Date().toISOString()
     };

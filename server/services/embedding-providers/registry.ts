@@ -193,6 +193,7 @@ export class EmbeddingProviderRegistry {
     // Build provider order from available env vars
     const order: EmbeddingProviderName[] = [];
     if (process.env.OPENAI_API_KEY) order.push('openai');
+    if (process.env.OPENROUTER_API_KEY) order.push('openrouter');
     if (process.env.GOOGLE_AI_API_KEY || process.env.GEMINI_API_KEY) order.push('gemini');
     if (process.env.TOGETHER_API_KEY) order.push('together');
     if (process.env.COHERE_API_KEY) order.push('cohere');
@@ -201,7 +202,7 @@ export class EmbeddingProviderRegistry {
 
     // Default: at least list the known providers
     if (order.length === 0) {
-      order.push('openai', 'gemini');
+      order.push('gemini', 'openai', 'openrouter', 'together', 'cohere', 'huggingface', 'ollama');
     }
 
     return {

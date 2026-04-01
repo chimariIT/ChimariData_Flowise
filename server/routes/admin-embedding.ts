@@ -226,6 +226,8 @@ function getEnvVarsForProvider(name: EmbeddingProviderName): string[] {
   switch (name) {
     case 'openai':
       return ['OPENAI_API_KEY'];
+    case 'openrouter':
+      return ['OPENROUTER_API_KEY'];
     case 'gemini':
       return ['GOOGLE_AI_API_KEY', 'GEMINI_API_KEY'];
     case 'ollama':

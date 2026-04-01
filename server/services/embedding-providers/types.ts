@@ -12,6 +12,7 @@
 
 export type EmbeddingProviderName =
   | 'openai'
+  | 'openrouter'
   | 'gemini'
   | 'ollama'
   | 'together'

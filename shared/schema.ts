@@ -264,6 +264,8 @@ export const dataProjectSchema = z.object({
   journeyStartedAt: z.date().optional(),
   journeyCompletedAt: z.date().optional(),
   journeyProgress: z.any().optional(),
+  executionState: z.any().optional(), // JO-1 FIX: Persist execution state across restarts
+  artifactGenerationStatus: z.any().optional(), // EX-2 FIX: Track artifact generation status
 });
 
 export type DataProject = z.infer<typeof dataProjectSchema>;
@@ -276,6 +278,35 @@ export const insertDataProjectSchema = dataProjectSchema.omit({
 });
 
 export type InsertDataProject = z.infer<typeof insertDataProjectSchema>;
+
+// JO-1 FIX: Execution state tracking for persistence across restarts
+export interface ExecutionState {
+  currentAnalysisId?: string;
+  totalAnalyses: number;
+  completedAnalyses: number;
+  currentStep?: string;
+  startTime?: string; // ISO timestamp
+  lastUpdate?: string; // ISO timestamp
+  status: 'idle' | 'running' | 'paused' | 'completed' | 'error';
+  error?: string;
+}
+
+// EX-2 FIX: Artifact generation status tracking
+export interface ArtifactGenerationStatus {
+  analysisId: string;
+  artifacts: {
+    [artifactType: string]: {
+      status: 'pending' | 'generating' | 'complete' | 'failed';
+      progress?: number; // 0-100 percentage
+      error?: string;
+      artifactId?: string;
+      generatedAt?: string; // ISO timestamp
+    };
+  };
+  overallStatus: 'pending' | 'in_progress' | 'complete' | 'partial' | 'failed';
+  startedAt: string; // ISO timestamp
+  completedAt?: string; // ISO timestamp
+}
 
 // Pricing tiers
 export const pricingTierSchema = z.object({
@@ -706,6 +737,8 @@ export const projects = pgTable("projects", {
   journeyStartedAt: timestamp("journey_started_at"), // When user first started the journey
   journeyCompletedAt: timestamp("journey_completed_at"), // When user completed all steps
   journeyProgress: jsonb("journey_progress").default('{}'),
+  executionState: jsonb("execution_state").default('{}'), // JO-1 FIX: Persist execution state across restarts
+  artifactGenerationStatus: jsonb("artifact_generation_status").default('{}'), // EX-2 FIX: Track artifact generation status
 
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),

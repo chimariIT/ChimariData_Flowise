@@ -109,6 +109,135 @@ User Query: ${prompt}`;
   }
 }
 
+class OpenRouterProvider implements AIProvider {
+  async queryData(apiKey: string, prompt: string, dataContext: any): Promise<string> {
+    const client = new OpenAI({
+      apiKey,
+      baseURL: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
+    });
+
+    const systemPrompt = `You are a data analyst AI. You have access to a dataset with the following schema and sample data:
+
+Schema: ${JSON.stringify(dataContext.schema, null, 2)}
+Sample Data (first 5 rows): ${JSON.stringify(dataContext.sampleData, null, 2)}
+Total Records: ${dataContext.recordCount}
+
+Provide insights, analysis, and answers based on this data. Be specific and reference actual data patterns when possible.`;
+
+    const response = await client.chat.completions.create({
+      model: process.env.OPENROUTER_LLM_MODEL || 'openai/gpt-4o-mini',
+      max_tokens: 1024,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: prompt }
+      ],
+    });
+
+    return response.choices[0]?.message?.content || 'Unable to process response';
+  }
+
+  async generateResponse(apiKey: string, prompt: string): Promise<string> {
+    const client = new OpenAI({
+      apiKey,
+      baseURL: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
+    });
+
+    const response = await client.chat.completions.create({
+      model: process.env.OPENROUTER_LLM_MODEL || 'openai/gpt-4o-mini',
+      max_tokens: 1024,
+      messages: [{ role: 'user', content: prompt }],
+    });
+
+    return response.choices[0]?.message?.content || 'Unable to generate response';
+  }
+}
+
+class TogetherAIProvider implements AIProvider {
+  async queryData(apiKey: string, prompt: string, dataContext: any): Promise<string> {
+    const client = new OpenAI({
+      apiKey,
+      baseURL: process.env.TOGETHER_BASE_URL || 'https://api.together.xyz/v1',
+    });
+
+    const systemPrompt = `You are a data analyst AI. You have access to a dataset with the following schema and sample data:
+
+Schema: ${JSON.stringify(dataContext.schema, null, 2)}
+Sample Data (first 5 rows): ${JSON.stringify(dataContext.sampleData, null, 2)}
+Total Records: ${dataContext.recordCount}
+
+Provide insights, analysis, and answers based on this data. Be specific and reference actual data patterns when possible.`;
+
+    const response = await client.chat.completions.create({
+      model: process.env.TOGETHER_LLM_MODEL || 'meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo',
+      max_tokens: 1024,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: prompt }
+      ],
+    });
+
+    return response.choices[0]?.message?.content || 'Unable to process response';
+  }
+
+  async generateResponse(apiKey: string, prompt: string): Promise<string> {
+    const client = new OpenAI({
+      apiKey,
+      baseURL: process.env.TOGETHER_BASE_URL || 'https://api.together.xyz/v1',
+    });
+
+    const response = await client.chat.completions.create({
+      model: process.env.TOGETHER_LLM_MODEL || 'meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo',
+      max_tokens: 1024,
+      messages: [{ role: 'user', content: prompt }],
+    });
+
+    return response.choices[0]?.message?.content || 'Unable to generate response';
+  }
+}
+
+class GroqAIProvider implements AIProvider {
+  async queryData(apiKey: string, prompt: string, dataContext: any): Promise<string> {
+    const client = new OpenAI({
+      apiKey,
+      baseURL: process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1',
+    });
+
+    const systemPrompt = `You are a data analyst AI. You have access to a dataset with the following schema and sample data:
+
+Schema: ${JSON.stringify(dataContext.schema, null, 2)}
+Sample Data (first 5 rows): ${JSON.stringify(dataContext.sampleData, null, 2)}
+Total Records: ${dataContext.recordCount}
+
+Provide insights, analysis, and answers based on this data. Be specific and reference actual data patterns when possible.`;
+
+    const response = await client.chat.completions.create({
+      model: process.env.GROQ_LLM_MODEL || 'llama-3.1-70b-versatile',
+      max_tokens: 1024,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: prompt }
+      ],
+    });
+
+    return response.choices[0]?.message?.content || 'Unable to process response';
+  }
+
+  async generateResponse(apiKey: string, prompt: string): Promise<string> {
+    const client = new OpenAI({
+      apiKey,
+      baseURL: process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1',
+    });
+
+    const response = await client.chat.completions.create({
+      model: process.env.GROQ_LLM_MODEL || 'llama-3.1-70b-versatile',
+      max_tokens: 1024,
+      messages: [{ role: 'user', content: prompt }],
+    });
+
+    return response.choices[0]?.message?.content || 'Unable to generate response';
+  }
+}
+
 class MetaProvider implements AIProvider {
   async queryData(apiKey: string, prompt: string, dataContext: any): Promise<string> {
     // Meta Llama via API (e.g., Replicate, Hugging Face, or direct endpoint)
@@ -281,6 +410,9 @@ export class AIService {
     anthropic: new AnthropicProvider(),
     openai: new OpenAIProvider(),
     gemini: new GeminiProvider(),
+    openrouter: new OpenRouterProvider(),
+    together: new TogetherAIProvider(),
+    groq: new GroqAIProvider(),
     meta: new MetaProvider(),
   };
 
@@ -576,6 +708,33 @@ Format as JSON array.`;
         requiresApiKey: true,
         setupInstructions: 'Get your API key from ai.google.dev'
       },
+      openrouter: {
+        name: 'OpenRouter',
+        model: 'Configurable (default: GPT-4o Mini route)',
+        pricing: 'Varies by routed model',
+        description: 'Unified gateway with multi-model routing and broad fallback coverage',
+        tier: 'professional',
+        requiresApiKey: true,
+        setupInstructions: 'Get your API key from openrouter.ai'
+      },
+      together: {
+        name: 'Together AI',
+        model: 'Llama 3.1 70B Instruct (default)',
+        pricing: 'Low-cost open-source model hosting',
+        description: 'Open-source model access with cost-friendly fallback options',
+        tier: 'professional',
+        requiresApiKey: true,
+        setupInstructions: 'Get your API key from together.ai'
+      },
+      groq: {
+        name: 'Groq',
+        model: 'Llama 3.1 70B Versatile (default)',
+        pricing: 'Low-cost fast inference',
+        description: 'Ultra-fast inference for resilient fallback and rapid responses',
+        tier: 'professional',
+        requiresApiKey: true,
+        setupInstructions: 'Get your API key from groq.com'
+      },
       meta: {
         name: 'Meta Llama',
         model: 'Llama 2 70B Chat',
@@ -611,7 +770,7 @@ Format as JSON array.`;
         price: '$29/month',
         features: [
           '500 AI queries per month',
-          'All AI providers (Anthropic, OpenAI, Gemini)',
+          'All AI providers (Anthropic, OpenAI, Gemini, OpenRouter, Together, Groq)',
           'Advanced visualizations',
           'Custom API integrations',
           'Priority support',

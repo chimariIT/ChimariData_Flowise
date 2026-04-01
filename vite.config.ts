@@ -147,6 +147,21 @@ export default defineConfig({
         },
       },
       // ========================================================================
+      // Auth Proxy - Routes /api/auth/* to Python backend /auth/*
+      // ========================================================================
+      '/api/auth': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path) => path.replace(/^\/api\/auth/, '/auth'),
+      },
+      '/api/projects': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        secure: false,
+        // Don't rewrite - Python backend has /projects at root level too
+      },
+      // ========================================================================
       // WebSocket Proxy - Routes all /ws/* connections to Python backend
       // ========================================================================
       // Python Backend WebSocket: ws://localhost:8000/ws

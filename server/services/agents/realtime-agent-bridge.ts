@@ -106,7 +106,11 @@ export class RealtimeAgentBridge extends EventEmitter {
 
     // JO-2 FIX: Listen for per-analysis progress events and forward to WebSocket
     this.messageBroker.on('analysis:progress', async (data: any) => {
-      if (!data?.projectId) return;
+      if (!data?.projectId) {
+        console.warn('⚠️ RealtimeAgentBridge: analysis:progress event missing projectId');
+        return;
+      }
+
       const event: RealtimeEvent = {
         type: 'progress',
         sourceType: 'analysis',
@@ -123,6 +127,14 @@ export class RealtimeAgentBridge extends EventEmitter {
           analysisId: data.analysisId,
         },
       };
+
+      // Log the event for debugging
+      console.log(`📤 RealtimeAgentBridge: Bridging analysis:progress for project ${data.projectId}`, {
+        analysisId: data.analysisId,
+        status: data.status,
+        analysisName: data.analysisName
+      });
+
       this.realtimeServer.broadcastToProject(data.projectId, event);
     });
   }

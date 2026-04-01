@@ -15,6 +15,7 @@ export interface ArtifactConfig {
   userId: string;
   journeyType: 'non-tech' | 'business' | 'technical' | 'consultation';
   analysisResults: any[];
+  dataRows?: any[];
   visualizations: any[];
   insights: string[];
   datasetSizeMB: number;
@@ -339,8 +340,15 @@ export class ArtifactGenerator {
   private async generateDashboard(config: ArtifactConfig) {
     return {
       url: `/dashboard/${config.projectId}`,
-      filters: this.detectFilters(config.analysisResults)
+      filters: this.detectFilters(this.getExportRows(config))
     };
+  }
+
+  private getExportRows(config: ArtifactConfig) {
+    if (Array.isArray(config.dataRows) && config.dataRows.length > 0) {
+      return config.dataRows;
+    }
+    return config.analysisResults;
   }
 
   private async generatePDFReport(config: ArtifactConfig) {
@@ -1382,12 +1390,12 @@ export class ArtifactGenerator {
     fs.mkdirSync(artifactDir, { recursive: true });
 
     // ✅ GAP 7 FIX: Filter out PII columns from CSV export
-    let dataToExport = config.analysisResults;
+    let dataToExport = this.getExportRows(config);
     if (config.piiConfig && config.piiConfig.excludedColumns.length > 0) {
       const excludedCols = new Set(config.piiConfig.excludedColumns.map(c => c.toLowerCase()));
       console.log(`🔒 [GAP 7 FIX] Filtering ${excludedCols.size} PII columns from CSV export`);
 
-      dataToExport = config.analysisResults.map((row: any) => {
+      dataToExport = dataToExport.map((row: any) => {
         const filteredRow: Record<string, any> = {};
         for (const key of Object.keys(row)) {
           if (!excludedCols.has(key.toLowerCase())) {
@@ -1406,6 +1414,8 @@ export class ArtifactGenerator {
     const stats = fs.statSync(outputPath);
     const sizeMB = stats.size / (1024 * 1024);
 
+    console.log(`📦 [Artifacts] CSV export rows: ${dataToExport.length}, columns: ${dataToExport[0] ? Object.keys(dataToExport[0]).length : 0}`);
+
     return {
       url: `/api/artifacts/${config.projectId}/${filename}`,
       filename,
@@ -1421,12 +1431,12 @@ export class ArtifactGenerator {
     fs.mkdirSync(artifactDir, { recursive: true });
 
     // ✅ P0-4: Filter out PII columns from JSON export
-    let dataToExport = config.analysisResults;
+    let dataToExport = this.getExportRows(config);
     if (config.piiConfig && config.piiConfig.excludedColumns.length > 0) {
       const excludedCols = new Set(config.piiConfig.excludedColumns.map(c => c.toLowerCase()));
       console.log(`🔒 [P0-4] Filtering ${excludedCols.size} PII columns from JSON export`);
 
-      dataToExport = config.analysisResults.map((row: any) => {
+      dataToExport = dataToExport.map((row: any) => {
         const filteredRow: Record<string, any> = {};
         for (const key of Object.keys(row)) {
           if (!excludedCols.has(key.toLowerCase())) {
@@ -1453,6 +1463,8 @@ export class ArtifactGenerator {
 
     const stats = fs.statSync(outputPath);
     const sizeMB = stats.size / (1024 * 1024);
+
+    console.log(`📦 [Artifacts] JSON export rows: ${dataToExport.length}, columns: ${dataToExport[0] ? Object.keys(dataToExport[0]).length : 0}`);
 
     return {
       url: `/api/artifacts/${config.projectId}/${filename}`,

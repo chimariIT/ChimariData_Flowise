@@ -16,6 +16,7 @@ import { errorHandler } from '../services/enhanced-error-handler';
 import { ensureAuthenticated } from './auth';
 import { adminRateLimit } from '../middleware/security-headers';
 import { requireAdmin, requirePermission, requireSuperAdmin, getUserPermissions } from '../middleware/rbac';
+import { checkInitializationHealth, requireInitializedHealth } from '../services/initialization-health-check';
 import {
   agentTemplates,
   getAgentTemplate,
@@ -67,6 +68,10 @@ router.get('/permissions', async (req: Request, res: Response) => {
 // Apply rate limiting, authentication, and admin check to all routes
 router.use(adminRateLimit);
 router.use(ensureAuthenticated);
+
+// Check initialization health before allowing admin access
+router.use(requireInitializedHealth);
+
 router.use(requireAdmin);
 
 // Helper function to broadcast admin events
@@ -983,20 +988,26 @@ router.post('/websocket/reset-metrics', async (req, res) => {
 
 /**
  * GET /api/admin/database/status
- * Get database connection pool status and metrics
+ * Get database connection pool status and metrics with initialization health
  */
 router.get('/database/status', async (req, res) => {
   try {
     const poolStats = getPoolStats();
-    
+
     if (!poolStats) {
+      console.error('❌ Database pool not available');
       return res.status(503).json({
         success: false,
         error: 'Database not available',
         message: 'Database connection pool is not initialized'
       });
     }
-    
+
+    // Check initialization health
+    const initHealth = checkInitializationHealth();
+
+    console.log(`📊 Database status: ${poolStats.totalCount} total, ${poolStats.idleCount} idle, ${poolStats.waitingCount} waiting`);
+
     res.json({
       success: true,
       data: {
@@ -1004,9 +1015,17 @@ router.get('/database/status', async (req, res) => {
         poolStats,
         status: 'connected',
         environment: process.env.NODE_ENV || 'development'
+      },
+      initialization: {
+        database: initHealth.database,
+        agentSystem: initHealth.agentSystem,
+        toolRegistry: initHealth.toolRegistry,
+        messagePool: initHealth.messagePool,
+        allReady: initHealth.allReady
       }
     });
   } catch (error: any) {
+    console.error('❌ Failed to fetch database status:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to fetch database status',
@@ -1017,38 +1036,54 @@ router.get('/database/status', async (req, res) => {
 
 /**
  * GET /api/admin/database/health
- * Get database health check
+ * Get comprehensive database health check including initialization status
  */
 router.get('/database/health', async (req, res) => {
   try {
+    // Check database pool health
     const poolStats = getPoolStats();
-    
+
     if (!poolStats) {
+      console.error('❌ Database health check failed: Pool not initialized');
       return res.status(503).json({
         success: false,
         healthy: false,
-        error: 'Database not available'
+        error: 'Database not available',
+        message: 'Database connection pool is not initialized'
       });
     }
-    
+
+    // Check initialization health
+    const initHealth = checkInitializationHealth();
+
     // Health assessment logic
     const isHealthy = poolStats.totalCount > 0 && poolStats.waitingCount < 10;
-    const status = isHealthy ? 'healthy' : 'degraded';
+    const status = isHealthy && initHealth.allReady ? 'healthy' :
+                  isHealthy ? 'degraded' :
+                  initHealth.allReady ? 'initializing' : 'unhealthy';
     
-    res.status(isHealthy ? 200 : 503).json({
-      success: isHealthy,
-      healthy: isHealthy,
+    res.status(isHealthy && initHealth.allReady ? 200 : 503).json({
+      success: isHealthy && initHealth.allReady,
+      healthy: isHealthy && initHealth.allReady,
       status,
       timestamp: new Date().toISOString(),
       details: {
         totalConnections: poolStats.totalCount,
         idleConnections: poolStats.idleCount,
         waitingClients: poolStats.waitingCount,
-        poolUtilization: poolStats.totalCount > 0 ? 
+        poolUtilization: poolStats.totalCount > 0 ?
           Math.round(((poolStats.totalCount - poolStats.idleCount) / poolStats.totalCount) * 100) : 0
+      },
+      initialization: {
+        database: initHealth.database,
+        agentSystem: initHealth.agentSystem,
+        toolRegistry: initHealth.toolRegistry,
+        messagePool: initHealth.messagePool,
+        allReady: initHealth.allReady
       }
     });
   } catch (error: any) {
+    console.error('❌ Database health check failed:', error);
     res.status(500).json({
       success: false,
       healthy: false,
@@ -1071,6 +1106,7 @@ router.get('/database/optimization/health', async (req, res) => {
       data: healthCheck
     });
   } catch (error: any) {
+    console.error('❌ Failed to perform database health check:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to perform database health check',

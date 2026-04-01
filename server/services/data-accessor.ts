@@ -218,6 +218,62 @@ export class DataAccessorService {
     return (dataset as any).schema || meta.schema || null;
   }
 
+  /**
+   * DU-1 Phase 4: Get joined dataset for a project.
+   *
+   * This method retrieves the joined dataset from journeyProgress, which is the
+   * Single Source of Truth (SSOT) for multi-dataset joins.
+   *
+   * Priority:
+   *   1. journeyProgress.joinedData.fullData (complete joined data)
+   *   2. journeyProgress.joinedData.preview (joined preview)
+   *
+   * Returns null if no joined data exists.
+   *
+   * @param projectId - The project ID to get joined data for
+   * @returns Joined dataset array or null
+   */
+  async getJoinedData(projectId: string): Promise<any[] | null> {
+    if (!db) return null;
+
+    // Get the project to access journeyProgress
+    const projectDatasetLinks = await db
+      .select()
+      .from(projectDatasets)
+      .where(eq(projectDatasets.projectId, projectId))
+      .limit(1);
+
+    if (!projectDatasetLinks || projectDatasetLinks.length === 0) {
+      return null;
+    }
+
+    const project = (projectDatasetLinks[0] as any)?.project;
+    if (!project) {
+      return null;
+    }
+
+    const journeyProgress = (project as any)?.journeyProgress || {};
+    const joinedData = journeyProgress.joinedData;
+
+    if (!joinedData) {
+      return null;
+    }
+
+    // Priority 1: Full joined data from journeyProgress
+    if (Array.isArray(joinedData.fullData) && joinedData.fullData.length > 0) {
+      console.log(`✅ [DataAccessor] Using joinedData.fullData (${joinedData.fullData.length} rows)`);
+      return joinedData.fullData;
+    }
+
+    // Priority 2: Preview from joinedData
+    if (Array.isArray(joinedData.preview) && joinedData.preview.length > 0) {
+      console.log(`⚠️ [DataAccessor] Using joinedData.preview (${joinedData.preview.length} rows)`);
+      return joinedData.preview;
+    }
+
+    return null;
+  }
+
   // ============ Private Helpers ============
 
   private extractDataFromDataset(dataset: any): DatasetDataResult | null {

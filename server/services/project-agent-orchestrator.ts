@@ -4,6 +4,7 @@ import { ProjectManagerAgent } from './project-manager-agent';
 import { TechnicalAIAgent } from './technical-ai-agent';
 import { BusinessAgent } from './business-agent';
 import { DataEngineerAgent } from './data-engineer-agent';
+import { supervisorReadinessValidator } from "./supervisor-readiness-validator";
 import { AgentInitializationService } from './agent-initialization';
 
 import { SocketManager } from '../socket-manager';
@@ -644,7 +645,41 @@ export class ProjectAgentOrchestrator {
         // Update multi-agent coordination data in database
         await this.updateProjectCoordinationData(projectId);
 
-        // Automatically proceed to next step if no user input required
+        // Validate step readiness before proceeding to next step
+        const { ready: stepReady, issues: validationIssues } = await this.validateStepReadiness(projectId, step.id, result);
+
+        if (!stepReady) {
+          // Create validation failure checkpoint to block advancement
+          const validationCheckpoint: AgentCheckpoint = {
+            id: `checkpoint_${Date.now()}_${step.id}_validation_failed`,
+            projectId,
+            agentType: 'project_manager',
+            stepName: step.id,
+            status: 'waiting_approval',
+            message: `⚠️ ${step.name} completed but has validation issues. Review required before proceeding.`,
+            data: {
+              validationIssues,
+              stepResult: result,
+              requiresReview: true
+            },
+            timestamp: new Date(),
+            requiresUserInput: true,
+            userFeedback: undefined
+          };
+
+          await this.addCheckpoint(projectId, validationCheckpoint);
+          this.notifyAgentActivity(context.userId, projectId, {
+            type: 'checkpoint_created',
+            checkpoint: validationCheckpoint
+          });
+
+          console.log(`🛑 [STEP-VALIDATION] Blocking advancement due to validation issues:`, validationIssues);
+          // Mark as awaiting feedback to prevent auto-advance
+          this.executionMachine.markAwaitingFeedback(projectId, validationCheckpoint.id);
+          return; // Exit without auto-advancing
+        }
+
+        // Automatically proceed to next step if validation passed
         // (Steps that require user input will be handled separately)
         setTimeout(() => {
           console.log(`⏭️  [STEP-COMPLETE] Auto-proceeding to next step after ${step.id}`);
@@ -929,6 +964,110 @@ export class ProjectAgentOrchestrator {
     } catch (error) {
       console.error(`❌ [RESTORE-CONTEXT] Failed to restore context for project ${projectId}:`, error);
       return undefined;
+    }
+  }
+
+  /**
+   * Build step context from journey progress and previous step outputs
+   * This aggregates all relevant data from previous steps for validation
+   */
+  private async buildStepContext(projectId: string, stepId: string, currentResult: any): Promise<any> {
+    const [project] = await db
+      .select()
+      .from(projects)
+      .where(eq(projects.id, projectId))
+      .limit(1);
+
+    if (!project) {
+      console.warn(`⚠️ [BUILD-CONTEXT] Project ${projectId} not found`);
+      return null;
+    }
+
+    const journeyProgress = (project as any).journeyProgress || {};
+    const datasets = await storage.getProjectDatasets(projectId);
+
+    // Build comprehensive step context
+    const stepContext = {
+      stepId,
+      stepName: stepId,
+      inputs: {
+        projectId,
+        journeyProgress,
+        datasets: datasets.map((ds: any) => ({
+          id: ds.id,
+          name: ds.name,
+          rowCount: ds.data?.length || 0,
+          schema: ds.schema || ds.ingestionMetadata?.originalSchema || {}
+        })),
+        userGoals: journeyProgress.userGoals || [],
+        userQuestions: journeyProgress.userQuestions || [],
+        industryContext: journeyProgress.industryContext || '',
+        requiredElements: journeyProgress.requiredElements || []
+      },
+      outputs: {
+        ...currentResult,
+        // Include journey progress outputs specific to each step
+        datasetIds: journeyProgress.datasetIds,
+        schemaSummary: journeyProgress.schemaSummary,
+        piiAnalysisCompleted: journeyProgress.piiAnalysisCompleted,
+        joinConfig: journeyProgress.joinConfig,
+        definitions: journeyProgress.definitions,
+        elementColumnMap: journeyProgress.elementColumnMap,
+        transformationPlan: journeyProgress.transformationPlan,
+        transformedDataPersisted: journeyProgress.transformedDataPersisted,
+        filteredAnalysisTypes: journeyProgress.filteredAnalysisTypes,
+        requiredColumnsPresent: journeyProgress.requiredColumnsPresent,
+        resultShapeValid: journeyProgress.resultShapeValid,
+        insights: journeyProgress.insights,
+        visualizations: journeyProgress.visualizations,
+        piiExclusionsApplied: journeyProgress.piiExclusionsApplied,
+        piiExclusionsEnforced: journeyProgress.piiExclusionsEnforced
+      },
+      readinessFlags: {
+        ready: false,
+        issues: []
+      },
+      timestamp: new Date()
+    };
+
+    console.log(`📋 [BUILD-CONTEXT] Built context for step ${stepId}:`, {
+      inputKeys: Object.keys(stepContext.inputs),
+      outputKeys: Object.keys(stepContext.outputs).filter(k => stepContext.outputs[k] !== undefined)
+    });
+
+    return stepContext;
+  }
+
+  /**
+   * Validate step readiness before advancing to next step
+   */
+  private async validateStepReadiness(projectId: string, stepId: string, currentResult: any): Promise<{ ready: boolean; issues: string[] }> {
+    try {
+      const stepContext = await this.buildStepContext(projectId, stepId, currentResult);
+      if (!stepContext) {
+        console.warn(`⚠️ [VALIDATE-READINESS] Failed to build context for step ${stepId}`);
+        return { ready: false, issues: ['Failed to build step context'] };
+      }
+
+      const validationResult = supervisorReadinessValidator.validateStep(stepId, stepContext);
+
+      // Store step context and validation result
+      await supervisorReadinessValidator.storeStepContext(projectId, stepContext);
+      await supervisorReadinessValidator.storeValidationResult(projectId, stepId, validationResult);
+
+      if (!validationResult.ready) {
+        console.warn(`⚠️ [VALIDATE-READINESS] Step ${stepId} validation failed:`, validationResult.issues);
+        if (validationResult.validationNotes) {
+          console.log(`📝 [VALIDATE-READINESS] Validation notes:`, validationResult.validationNotes);
+        }
+      } else {
+        console.log(`✅ [VALIDATE-READINESS] Step ${stepId} validation passed`);
+      }
+
+      return { ready: validationResult.ready, issues: validationResult.issues };
+    } catch (error) {
+      console.error(`❌ [VALIDATE-READINESS] Error validating step ${stepId}:`, error);
+      return { ready: false, issues: [`Validation error: ${error instanceof Error ? error.message : String(error)}`] };
     }
   }
 
