@@ -16,7 +16,7 @@ import uuid
 
 from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import JSONResponse, ORJSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import json
 from typing import Dict, Any
 
