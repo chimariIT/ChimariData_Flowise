@@ -9,6 +9,8 @@ This enables the Customer Support Agent to:
 - Support semantic search of knowledge
 """
 
+from __future__ import annotations
+
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from ..repositories.knowledge_node_repository import (

@@ -208,7 +208,7 @@ def main():
             })
 
         # Metadata
-        processing_time_ms = int((time.time() - start_time) * 1000))
+        processing_time_ms = int((time.time() - start_time) * 1000)
         result_data["metadata"] = {
             "recordCount": int(len(df)),
             "columnCount": int(len(df.columns)),

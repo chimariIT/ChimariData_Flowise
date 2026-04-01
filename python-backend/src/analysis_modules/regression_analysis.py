@@ -299,7 +299,7 @@ def main():
                 )
 
             # Feature selection using K-best
-            selector = SelectKBest(f_regression=k='f_regression', k=min(5, len(X_train.columns)))
+            selector = SelectKBest(score_func=f_regression, k=min(5, len(X_train.columns)))
             X_train_selected = selector.fit_transform(X_train)
 
             # Get selected features
@@ -348,7 +348,7 @@ def main():
                 "min": float(y_pred.min()),
                 "max": float(y_pred.max()),
                 "mean": float(y_pred.mean()),
-                "std": float(y_pred.std())
+                "std": float(y_pred.std()),
                 "residuals": {
                     "min": float(residuals.min()),
                     "max": float(residuals.max()),

@@ -12,7 +12,7 @@ Architecture: Python + LangChain + Pydantic + FastAPI + PostgreSQL
 """
 
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator, Dict, Optional, Any
+from typing import AsyncGenerator, Dict, Optional, Any, Set
 import logging
 import os
 from pathlib import Path
