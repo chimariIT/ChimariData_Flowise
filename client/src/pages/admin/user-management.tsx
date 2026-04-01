@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 import { apiClient } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
+import { apiClient } from "@/lib/api";
 
 export default function UserManagement() {
   const { toast } = useToast();
@@ -37,24 +38,19 @@ export default function UserManagement() {
   const [page, setPage] = useState(1);
   const pageSize = 20;
 
-  // Fetch users from admin endpoint
-  const { data: usersData, isLoading, error, refetch } = useQuery({
-    queryKey: ["/api/admin/users", page, searchQuery, roleFilter],
+  // Fetch users from Python backend via Vite proxy
+  const filterParam = roleFilter !== "all" ? `&filter_role=${roleFilter}` : "";
+  const { data: usersData, isLoading: loading, error, refetch } = useQuery({
+    queryKey: ['/api/v1/admin/users', page, pageSize, roleFilter],
     queryFn: async () => {
-      const params = new URLSearchParams();
-      params.set("page", String(page));
-      params.set("limit", String(pageSize));
-      if (searchQuery) params.set("search", searchQuery);
-      if (roleFilter !== "all") params.set("role", roleFilter);
-      const response = await apiClient.get(`/api/admin/users?${params.toString()}`);
+      const response = await apiClient.get(`/api/v1/admin/users?limit=${pageSize}&offset=${(page - 1) * pageSize}${filterParam}`);
       return response?.data || response;
     },
-    staleTime: 15000,
   });
+  const users = usersData?.users || [];
+  const total = usersData?.total || 0;
 
-  const users = usersData?.users || usersData || [];
-  const totalCount = usersData?.total || users.length;
-  const totalPages = Math.ceil(totalCount / pageSize);
+  const totalPages = Math.ceil(total / pageSize);
 
   // Mutations
   const updateRoleMutation = useMutation({
@@ -70,44 +66,9 @@ export default function UserManagement() {
     },
   });
 
-  const toggleAdminMutation = useMutation({
-    mutationFn: async ({ userId, isAdmin }: { userId: string; isAdmin: boolean }) => {
-      return apiClient.put(`/api/admin/users/${userId}`, { isAdmin });
-    },
-    onSuccess: () => {
-      toast({ title: "Admin Status Updated" });
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
-    },
-    onError: (err: any) => {
-      toast({ title: "Error", description: err.message || "Failed to toggle admin", variant: "destructive" });
-    },
-  });
+  // Note: Toggle admin is now handled via role assignment/revoke in Python backend
 
-  const changeSubscriptionMutation = useMutation({
-    mutationFn: async ({ userId, tier }: { userId: string; tier: string }) => {
-      return apiClient.put(`/api/admin/users/${userId}/subscription`, { tier });
-    },
-    onSuccess: () => {
-      toast({ title: "Subscription Updated" });
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
-    },
-    onError: (err: any) => {
-      toast({ title: "Error", description: err.message || "Failed to change subscription", variant: "destructive" });
-    },
-  });
-
-  const awardCreditsMutation = useMutation({
-    mutationFn: async ({ userId, amount, reason }: { userId: string; amount: number; reason: string }) => {
-      return apiClient.post(`/api/admin/users/${userId}/credits`, { amount, reason });
-    },
-    onSuccess: () => {
-      toast({ title: "Credits Awarded" });
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
-    },
-    onError: (err: any) => {
-      toast({ title: "Error", description: err.message || "Failed to award credits", variant: "destructive" });
-    },
-  });
+  // Note: Subscription and credit management handled through Python backend billing service
 
   const getTierBadgeColor = (tier: string) => {
     switch (tier?.toLowerCase()) {

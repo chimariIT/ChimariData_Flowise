@@ -34,6 +34,93 @@ const NODE_TYPE_COLORS: Record<string, string> = {
 };
 
 // ============================================================================
+// PYTHON BACKEND KNOWLEDGE SEARCH (New Feature)
+// ============================================================================
+
+function PythonKnowledgeSearch() {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!query.trim()) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await apiClient.post('/api/v1/knowledge/search', { query: query.trim(), limit: 20 });
+      setResults(response?.data?.results || response?.results || []);
+    } catch (err: any) {
+      setError(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleClear = () => {
+    setQuery("");
+    setResults([]);
+    setError(null);
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="text-sm font-medium">
+        <span className="text-blue-600 font-semibold">Python Backend:</span> Knowledge Search
+      </div>
+      <form onSubmit={handleSearch} className="flex gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-2.5 w-4 h-4 text-muted-foreground" />
+          <Input
+            placeholder="Search knowledge base via Python backend..."
+            className="pl-10"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </div>
+        <Button type="submit" disabled={loading || !query.trim()}>
+          {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+        </Button>
+        {results.length > 0 && (
+          <Button type="button" variant="outline" onClick={handleClear}>
+            Clear
+          </Button>
+        )}
+      </form>
+
+      {error && (
+        <div className="text-sm text-destructive bg-destructive/10 p-3 rounded">
+          Search error: {(error as Error).message}
+        </div>
+      )}
+
+      {results.length > 0 && (
+        <div className="space-y-2">
+          <div className="text-sm font-medium">{results.length} results from Python backend:</div>
+          <div className="border rounded divide-y">
+            {results.map((result) => (
+              <div key={result.id} className="p-3 hover:bg-muted/50">
+                <div className="flex items-center gap-2 mb-1">
+                  <Badge className={NODE_TYPE_COLORS[result.type] || ""}>{result.type}</Badge>
+                  <span className="font-medium text-sm">{result.title}</span>
+                  <span className="text-xs text-muted-foreground ml-auto">
+                    Confidence: {Math.round(result.confidence * 100)}%
+                  </span>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Relevance: {Math.round(result.relevance * 100)}%
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
 // OVERVIEW SECTION
 // ============================================================================
 
@@ -796,6 +883,7 @@ export default function KnowledgeManagement() {
         <Tabs value={activeSubTab} onValueChange={setActiveSubTab}>
           <TabsList className="flex flex-wrap gap-1 mb-4">
             <TabsTrigger value="overview" className="text-xs"><BarChart3 className="w-3 h-3 mr-1" />Overview</TabsTrigger>
+            <TabsTrigger value="search" className="text-xs"><Search className="w-3 h-3 mr-1" />Search (Python)</TabsTrigger>
             <TabsTrigger value="nodes" className="text-xs"><Brain className="w-3 h-3 mr-1" />Nodes</TabsTrigger>
             <TabsTrigger value="edges" className="text-xs"><GitBranch className="w-3 h-3 mr-1" />Edges</TabsTrigger>
             <TabsTrigger value="enrichment" className="text-xs"><RefreshCw className="w-3 h-3 mr-1" />Enrichment</TabsTrigger>
@@ -804,6 +892,7 @@ export default function KnowledgeManagement() {
           </TabsList>
 
           <TabsContent value="overview"><OverviewSection /></TabsContent>
+          <TabsContent value="search"><PythonKnowledgeSearch /></TabsContent>
           <TabsContent value="nodes"><NodesSection /></TabsContent>
           <TabsContent value="edges"><EdgesSection /></TabsContent>
           <TabsContent value="enrichment"><EnrichmentSection /></TabsContent>
