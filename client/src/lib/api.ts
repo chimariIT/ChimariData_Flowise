@@ -1,6 +1,6 @@
-// IMPORTANT: Direct backend connection to preserve Authorization headers
-// Now connecting to Python backend on port 8000
-export const API_BASE = import.meta.env.DEV ? 'http://localhost:8000' : window.location.origin;
+// Use Vite proxy in dev (same origin) — the proxy rewrites /api/* to /* for the Python backend.
+// Auth headers are preserved by the proxy configuration in vite.config.ts.
+export const API_BASE = '';
 const RETRYABLE_STATUS_CODES = [429, 502, 503, 504];
 const DEFAULT_RETRY_COUNT = 2;
 

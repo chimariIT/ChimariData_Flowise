@@ -175,8 +175,8 @@ const GuidedAnalysisCheckout: React.FC = () => {
           headers['Authorization'] = `Bearer ${token}`;
           headers['X-Forwarded-Authorization'] = `Bearer ${token}`;
         }
-        // Use direct backend URL to bypass Vite proxy which strips headers
-        const apiBase = import.meta.env.DEV ? 'http://localhost:5000' : window.location.origin;
+        // Use Vite proxy — headers preserved via proxy configuration in vite.config.ts
+        const apiBase = '';
         const resp = await fetch(`${apiBase}/api/pricing/subscription`, {
           method: 'POST',
           headers,
