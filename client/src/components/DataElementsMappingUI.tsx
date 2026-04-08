@@ -26,6 +26,7 @@ import {
   GitBranch
 } from "lucide-react";
 import { apiClient } from "@/lib/api";
+import { getJourneyDisplayConfig } from "@/utils/journey-display";
 
 /** Safely convert any value to a renderable string. Handles objects, arrays, nulls. */
 const safeString = (value: any, fallback = ''): string => {
@@ -124,6 +125,8 @@ interface DataElementsMappingUIProps {
   sampleData?: Record<string, any>[];
   /** Show loading indicator while DE Agent is mapping elements */
   isMapping?: boolean;
+  /** Journey type — controls visibility of technical details */
+  journeyType?: string;
 }
 
 interface AIGenerationState {
@@ -158,8 +161,10 @@ export function DataElementsMappingUI({
   initialMappings,
   schema,
   sampleData,
-  isMapping = false
+  isMapping = false,
+  journeyType
 }: DataElementsMappingUIProps) {
+  const displayConfig = getJourneyDisplayConfig(journeyType || 'technical');
   const [editingElement, setEditingElement] = useState<string | null>(null);
   const [aiStates, setAIStates] = useState<Record<string, AIGenerationState>>({});
   const [definitionValidations, setDefinitionValidations] = useState<Record<string, DefinitionValidationState>>({});
@@ -951,7 +956,7 @@ export function DataElementsMappingUI({
                           <p className="text-sm text-emerald-800 mb-2">
                             {safeString(element.businessDefinition.businessDescription)}
                           </p>
-                          {element.businessDefinition.formula && (
+                          {displayConfig.showFormulas && element.businessDefinition.formula && (
                             <div className="text-xs font-mono bg-white p-2 rounded border border-emerald-200 text-emerald-700 mb-2">
                               <strong>Standard Formula:</strong> {safeString(element.businessDefinition.formula)}
                             </div>
@@ -966,7 +971,7 @@ export function DataElementsMappingUI({
                               ))}
                             </div>
                           )}
-                          {element.businessDefinition.aggregationMethod && (
+                          {displayConfig.showMethodNames && element.businessDefinition.aggregationMethod && (
                             <p className="text-xs text-emerald-600 mt-2">
                               <strong>Aggregation:</strong> {safeString(element.businessDefinition.aggregationMethod)}
                             </p>
@@ -1014,7 +1019,7 @@ export function DataElementsMappingUI({
                               <strong>How to calculate:</strong> {(element as any).calculationDefinition.formula.businessDescription}
                             </p>
                           )}
-                          {(element as any).calculationDefinition.formula?.pseudoCode &&
+                          {displayConfig.showPseudoCode && (element as any).calculationDefinition.formula?.pseudoCode &&
                            typeof (element as any).calculationDefinition.formula.pseudoCode === 'string' && (
                             <p className="text-xs font-mono bg-white p-2 rounded border border-blue-200 text-blue-700">
                               {(element as any).calculationDefinition.formula.pseudoCode}
@@ -1089,7 +1094,7 @@ export function DataElementsMappingUI({
                             ))}
                           </div>
                           {/* Show aggregation method if applicable */}
-                          {(element as any).calculationDefinition?.formula?.aggregationMethod && (
+                          {displayConfig.showMethodNames && (element as any).calculationDefinition?.formula?.aggregationMethod && (
                             <div className="mt-2 pt-2 border-t border-indigo-200 text-xs text-indigo-700">
                               <strong>Aggregation:</strong> {safeString((element as any).calculationDefinition.formula.aggregationMethod)}
                             </div>
@@ -1330,17 +1335,23 @@ export function DataElementsMappingUI({
 
                           {/* Generated Code Preview */}
                           {mapping.transformationCode && (
-                            <div className="mt-3 p-2 bg-gray-800 rounded">
-                              <div className="flex items-center justify-between mb-1">
-                                <span className="text-xs text-gray-400">Generated JavaScript</span>
-                                <Badge variant="outline" className="text-xs bg-gray-700 text-gray-300 border-gray-600">
-                                  AI Generated
-                                </Badge>
+                            displayConfig.showCode ? (
+                              <div className="mt-3 p-2 bg-gray-800 rounded">
+                                <div className="flex items-center justify-between mb-1">
+                                  <span className="text-xs text-gray-400">Generated JavaScript</span>
+                                  <Badge variant="outline" className="text-xs bg-gray-700 text-gray-300 border-gray-600">
+                                    AI Generated
+                                  </Badge>
+                                </div>
+                                <pre className="text-xs font-mono text-green-400 overflow-x-auto whitespace-pre-wrap">
+                                  {mapping.transformationCode}
+                                </pre>
                               </div>
-                              <pre className="text-xs font-mono text-green-400 overflow-x-auto whitespace-pre-wrap">
-                                {mapping.transformationCode}
-                              </pre>
-                            </div>
+                            ) : (
+                              <div className="mt-3">
+                                <Badge className="bg-green-100 text-green-800">Transformation configured</Badge>
+                              </div>
+                            )
                           )}
                         </div>
                       )}
@@ -1357,7 +1368,7 @@ export function DataElementsMappingUI({
                           <p className="text-sm text-gray-700">
                             {mapping.transformationDescription || element.transformationLogic?.description || 'No transformation defined'}
                           </p>
-                          {(mapping.transformationCode || element.transformationLogic?.code) && (
+                          {displayConfig.showCode && (mapping.transformationCode || element.transformationLogic?.code) && (
                             <pre className="mt-2 p-2 bg-gray-100 rounded text-xs font-mono overflow-x-auto">
                               {mapping.transformationCode || element.transformationLogic?.code}
                             </pre>

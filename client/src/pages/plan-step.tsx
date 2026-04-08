@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useParams } from "wouter";
+import { getJourneyDisplayConfig } from "@/utils/journey-display";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
@@ -130,6 +131,7 @@ export default function PlanStep({
   // CRITICAL FIX: Check localStorage as fallback (consistent with other steps)
   // JourneyWizard doesn't pass projectId prop, and URL may not have it
   const projectId = propProjectId || params.projectId || localStorage.getItem('currentProjectId') || undefined;
+  const displayConfig = getJourneyDisplayConfig(journeyType);
   const { toast } = useToast();
 
   // FIX: Production Readiness - Use useProject hook for SSOT journey progress
@@ -1333,8 +1335,14 @@ export default function PlanStep({
           {plan.analysisSteps.length > 0 && (
             <Card className="mt-4">
               <CardHeader>
-                <CardTitle className="text-lg">Execution Plan Details</CardTitle>
-                <CardDescription>Technical steps the analysis engine will execute</CardDescription>
+                <CardTitle className="text-lg">
+                  {displayConfig.planViewMode === 'full' ? 'Execution Plan Details' : "What We'll Analyze"}
+                </CardTitle>
+                <CardDescription>
+                  {displayConfig.planViewMode === 'full'
+                    ? 'Technical steps the analysis engine will execute'
+                    : "Here's what will happen with your data"}
+                </CardDescription>
               </CardHeader>
             </Card>
           )}
@@ -1348,10 +1356,12 @@ export default function PlanStep({
                 <CardDescription>{step.description}</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
+                {displayConfig.showMethodNames && (
                 <div>
                   <div className="text-sm font-medium mb-2">Method</div>
                   <Badge variant="secondary">{step.method}</Badge>
                 </div>
+                )}
                 <div>
                   <div className="text-sm font-medium mb-2">Confidence</div>
                   <Progress value={step.confidence} className="h-2" />
@@ -1360,11 +1370,15 @@ export default function PlanStep({
                 {step.inputs && step.inputs.length > 0 && (
                   <div>
                     <div className="text-sm font-medium mb-2">Inputs</div>
+                    {displayConfig.showFieldsAsCode ? (
                     <div className="flex flex-wrap gap-2">
                       {step.inputs.map((input, i) => (
                         <Badge key={i} variant="outline">{input}</Badge>
                       ))}
                     </div>
+                    ) : (
+                    <p className="text-sm text-muted-foreground">Your uploaded data</p>
+                    )}
                   </div>
                 )}
                 <div>
@@ -1375,7 +1389,7 @@ export default function PlanStep({
                     ))}
                   </ul>
                 </div>
-                {step.tools && step.tools.length > 0 && (
+                {displayConfig.showToolNames && step.tools && step.tools.length > 0 && (
                   <div>
                     <div className="text-sm font-medium mb-2">Tools</div>
                     <div className="flex flex-wrap gap-2">
