@@ -237,6 +237,11 @@ async def initialize_services():
     app.include_router(upload_router)
     logger.info("Upload routes included")
 
+    # Include data ingestion routes (database, API, cloud connectors)
+    from .api.data_ingestion_routes import router as data_ingestion_router
+    app.include_router(data_ingestion_router)
+    logger.info("Data ingestion routes included")
+
     # Include transformation routes (after app is fully created)
     from .api.transformation_routes import router as transformation_router
     app.include_router(transformation_router)

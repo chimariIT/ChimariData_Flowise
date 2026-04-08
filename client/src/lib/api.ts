@@ -1644,6 +1644,25 @@ export class APIClient {
   async autoFixDataQuality(datasetId: string, issueIds: string[]): Promise<any> {
     return this.post('/api/data-quality/auto-fix', { datasetId, issueIds });
   }
+
+  // Scenario Analysis
+  async getScenarioParameters(analysisType: string): Promise<any> {
+    return this.get(`/api/v1/analysis-execution/scenario-params/${analysisType}`);
+  }
+
+  async runScenario(params: {
+    projectId: string;
+    analysisType: string;
+    parameters: Record<string, any>;
+    originalExecutionId?: string;
+  }): Promise<any> {
+    return this.post('/api/v1/analysis-execution/scenario-run', {
+      project_id: params.projectId,
+      analysis_type: params.analysisType,
+      parameters: params.parameters,
+      original_execution_id: params.originalExecutionId,
+    });
+  }
 }
 
 export const apiClient = new APIClient();

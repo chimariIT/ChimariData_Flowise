@@ -1139,3 +1139,146 @@ async def get_project_analysis_status(project_id: str):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get status: {str(e)}"
         )
+
+
+# ============================================================================
+# SCENARIO ANALYSIS ENDPOINTS
+# ============================================================================
+
+# Configurable parameters per analysis type for what-if scenarios
+SCENARIO_PARAMETERS = {
+    "time_series": {
+        "label": "Time Series Analysis",
+        "parameters": [
+            {"key": "forecast_periods", "label": "Forecast Periods", "type": "slider", "min": 3, "max": 36, "default": 12, "step": 1},
+            {"key": "confidence_level", "label": "Confidence Level", "type": "slider", "min": 0.80, "max": 0.99, "default": 0.95, "step": 0.01},
+        ]
+    },
+    "clustering": {
+        "label": "Clustering / Segmentation",
+        "parameters": [
+            {"key": "n_clusters", "label": "Number of Clusters", "type": "slider", "min": 2, "max": 10, "default": 3, "step": 1},
+            {"key": "method", "label": "Algorithm", "type": "select", "options": ["kmeans", "hierarchical", "dbscan"], "default": "kmeans"},
+        ]
+    },
+    "regression": {
+        "label": "Regression / Prediction",
+        "parameters": [
+            {"key": "test_size", "label": "Test Split Ratio", "type": "slider", "min": 0.1, "max": 0.5, "default": 0.2, "step": 0.05},
+        ]
+    },
+    "descriptive": {
+        "label": "Descriptive Statistics",
+        "parameters": []
+    },
+    "correlation": {
+        "label": "Correlation Analysis",
+        "parameters": [
+            {"key": "method", "label": "Method", "type": "select", "options": ["pearson", "spearman", "kendall"], "default": "pearson"},
+        ]
+    },
+}
+
+
+@router.get("/analysis-execution/scenario-params/{analysis_type}")
+async def get_scenario_parameters(analysis_type: str):
+    """Get configurable parameters for what-if scenario analysis"""
+    # Normalize type name
+    normalized = analysis_type.lower().replace("-", "_").replace(" ", "_")
+
+    params = SCENARIO_PARAMETERS.get(normalized)
+    if not params:
+        # Return empty params for unsupported types
+        return {"analysis_type": normalized, "label": analysis_type, "parameters": []}
+
+    return {"analysis_type": normalized, **params}
+
+
+class ScenarioRunRequest(BaseModel):
+    """Request to re-run analysis with modified parameters"""
+    project_id: str
+    analysis_type: str
+    parameters: Dict[str, Any]
+    original_execution_id: Optional[str] = None
+
+
+@router.post("/analysis-execution/scenario-run")
+async def run_scenario(
+    request: ScenarioRunRequest,
+    background_tasks: BackgroundTasks,
+):
+    """
+    Re-run a single analysis type with modified parameters for what-if comparison.
+    Returns execution_id immediately; results available via status endpoint.
+    """
+    execution_id = str(uuid.uuid4())
+
+    logger.info(
+        f"Scenario run: {request.analysis_type} for project {request.project_id} "
+        f"with params {request.parameters}"
+    )
+
+    # Find the analysis module script
+    analysis_type = request.analysis_type.lower().replace("-", "_")
+    script_map = {
+        "time_series": "time_series_analysis.py",
+        "clustering": "clustering_analysis.py",
+        "regression": "regression_analysis.py",
+        "descriptive": "descriptive_stats.py",
+        "correlation": "correlation_analysis.py",
+        "comparative": "comparative_analysis.py",
+        "text_analysis": "text_analysis.py",
+        "classification": "classification_analysis.py",
+    }
+
+    script_name = script_map.get(analysis_type)
+    if not script_name:
+        raise HTTPException(status_code=400, detail=f"Unsupported analysis type: {analysis_type}")
+
+    # Run analysis in background
+    async def execute_scenario():
+        try:
+            script_path = Path(__file__).parent.parent / "analysis_modules" / script_name
+            if not script_path.exists():
+                logger.error(f"Analysis script not found: {script_path}")
+                return
+
+            # Build config with scenario parameters
+            config = {
+                "analysis_type": analysis_type,
+                "project_id": request.project_id,
+                "execution_id": execution_id,
+                "scenario_parameters": request.parameters,
+                **request.parameters,
+            }
+
+            # Execute Python script
+            process = subprocess.run(
+                [sys.executable, str(script_path)],
+                input=json.dumps(config),
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+
+            if process.returncode == 0:
+                try:
+                    result = json.loads(process.stdout)
+                    logger.info(f"Scenario {execution_id} completed successfully")
+                except json.JSONDecodeError:
+                    logger.error(f"Scenario {execution_id}: invalid JSON output")
+            else:
+                logger.error(f"Scenario {execution_id} failed: {process.stderr[:500]}")
+
+        except Exception as e:
+            logger.error(f"Scenario {execution_id} error: {e}", exc_info=True)
+
+    background_tasks.add_task(execute_scenario)
+
+    return {
+        "success": True,
+        "execution_id": execution_id,
+        "status": "running",
+        "analysis_type": analysis_type,
+        "parameters": request.parameters,
+    }
