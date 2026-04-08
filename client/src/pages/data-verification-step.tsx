@@ -85,6 +85,9 @@ export default function DataVerificationStep({
   const [showSchemaDialog, setShowSchemaDialog] = useState(false);
   const [editedSchema, setEditedSchema] = useState<any>(null);
 
+  // Multi-dataset join insights (populated from journeyProgress.joinedData)
+  const [joinInsights, setJoinInsights] = useState<any>(null);
+
   // Calculate quality score properly from backend response
   // Backend returns: { qualityScore: number, metrics: {...}, qualityScore: { overall, label }, ... }
   const qualityScore = (() => {
@@ -197,6 +200,20 @@ export default function DataVerificationStep({
           };
 
           setProjectData(projectWithData);
+
+          // Populate join insights from journeyProgress if multi-dataset
+          const jpJoinedData = project?.journeyProgress?.joinedData;
+          if (jpJoinedData?.joinInsights) {
+            setJoinInsights(jpJoinedData.joinInsights);
+          } else if (datasetsResponse.datasets.length > 1) {
+            setJoinInsights({
+              datasetCount: datasetsResponse.datasets.length,
+              joinStrategy: 'stacked',
+              detectionMethod: 'auto',
+              foreignKeys: [],
+              primaryDatasetName: dataset?.originalFileName || dataset?.name || 'Primary'
+            });
+          }
 
           // Mark preview as available if we have data
           if (projectWithData.preview && projectWithData.preview.length > 0) {
