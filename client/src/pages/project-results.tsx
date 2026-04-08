@@ -605,6 +605,23 @@ export default function ProjectResults({
                         {status.errorMessage}
                       </div>
                     )}
+                    {status.status === 'failed' && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="mt-2 h-6 text-xs px-2"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onBack();
+                          toast({
+                            title: "Re-run from Execute Step",
+                            description: `Navigate to the Execute step to re-run ${status.analysisName || status.analysisId}.`,
+                          });
+                        }}
+                      >
+                        Re-run Analysis
+                      </Button>
+                    )}
                   </CardContent>
                 </Card>
               ))}

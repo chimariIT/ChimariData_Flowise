@@ -128,8 +128,66 @@ export type {
 
 export class AnalysisExecutionService {
   /**
-   * Execute analysis based on user request
+   * In-memory analysis result cache.
+   * Key: `${projectId}:${sortedAnalysisTypes.join(',')}:${dataHash}`
+   * Value: { results, timestamp }
+   * TTL: 30 minutes (results are invalidated if data changes or time expires)
    */
+  private static resultCache = new Map<string, { results: AnalysisResults; timestamp: number }>();
+  private static readonly CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
+  /**
+   * Generate a cache key for a given analysis request.
+   * Uses projectId + sorted analysis types + data record count as a lightweight hash.
+   */
+  private static getCacheKey(projectId: string, analysisTypes: string[], dataRecordCount: number): string {
+    const sortedTypes = [...analysisTypes].sort().join(',');
+    return `${projectId}:${sortedTypes}:${dataRecordCount}`;
+  }
+
+  /**
+   * Check if a valid cached result exists for the given request.
+   * Returns null if no cache hit or cache is expired.
+   */
+  static getCachedResult(projectId: string, analysisTypes: string[], dataRecordCount: number): AnalysisResults | null {
+    const key = this.getCacheKey(projectId, analysisTypes, dataRecordCount);
+    const entry = this.resultCache.get(key);
+    if (!entry) return null;
+
+    if (Date.now() - entry.timestamp > this.CACHE_TTL_MS) {
+      this.resultCache.delete(key);
+      return null;
+    }
+
+    console.log(`✅ [Cache] Hit for project ${projectId}, types: ${analysisTypes.join(',')}`);
+    return entry.results;
+  }
+
+  /**
+   * Store analysis results in cache.
+   */
+  static cacheResult(projectId: string, analysisTypes: string[], dataRecordCount: number, results: AnalysisResults): void {
+    const key = this.getCacheKey(projectId, analysisTypes, dataRecordCount);
+    this.resultCache.set(key, { results, timestamp: Date.now() });
+
+    // Prune cache if it grows too large (keep max 50 entries)
+    if (this.resultCache.size > 50) {
+      const oldest = [...this.resultCache.entries()]
+        .sort((a, b) => a[1].timestamp - b[1].timestamp)[0];
+      if (oldest) this.resultCache.delete(oldest[0]);
+    }
+  }
+
+  /**
+   * Invalidate all cached results for a project (e.g., after data changes).
+   */
+  static invalidateProjectCache(projectId: string): void {
+    for (const key of this.resultCache.keys()) {
+      if (key.startsWith(`${projectId}:`)) {
+        this.resultCache.delete(key);
+      }
+    }
+  }
 
   /**
    * Retrieve user context from project session

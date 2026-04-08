@@ -2,8 +2,8 @@ import { Router } from 'express';
 import { getBillingService } from '../services/billing/unified-billing-service';
 import { ensureAuthenticated } from './auth';
 import { db } from '../db';
-import { subscriptionTierPricing, servicePricing, billingCampaigns } from '@shared/schema';
-import { eq } from 'drizzle-orm';
+import { subscriptionTierPricing, servicePricing, billingCampaigns, adminProjectActions } from '@shared/schema';
+import { eq, desc } from 'drizzle-orm';
 import { getStripeSyncService } from '../services/stripe-sync';
 import { AdminAuditLogService } from '../services/admin-audit-log';
 // FIX: Production Readiness - Use standardized admin middleware from RBAC
@@ -924,9 +924,22 @@ router.put('/analysis-pricing', ensureAuthenticated, ensureAdmin, async (req, re
             console.warn(`⚠️ [P0-2] Failed to broadcast config update (non-blocking):`, broadcastErr);
         }
 
-        // Log the admin action
+        // Log the admin action with audit trail
         const userId = (req.user as any)?.id;
         console.log(`✅ [Admin] User ${userId} updated analysis pricing config:`, updates);
+
+        await AdminAuditLogService.log({
+            action: 'update_analysis_pricing',
+            adminId: userId || 'unknown',
+            entityType: 'other',
+            changes: {
+                updatedFields: Object.keys(updates),
+                previousValues: 'see prior log entry',
+                newValues: updates,
+            },
+            reason: 'Admin pricing configuration update',
+            metadata: { timestamp: new Date().toISOString() }
+        });
 
         res.json({
             success: true,
@@ -950,6 +963,15 @@ router.post('/analysis-pricing/reset', ensureAuthenticated, ensureAdmin, async (
         const userId = (req.user as any)?.id;
         console.log(`🔄 [Admin] User ${userId} reset analysis pricing to defaults`);
 
+        await AdminAuditLogService.log({
+            action: 'reset_analysis_pricing',
+            adminId: userId || 'unknown',
+            entityType: 'other',
+            changes: { resetTo: 'defaults' },
+            reason: 'Admin reset pricing to defaults',
+            metadata: { timestamp: new Date().toISOString() }
+        });
+
         res.json({
             success: true,
             config,
@@ -957,6 +979,37 @@ router.post('/analysis-pricing/reset', ensureAuthenticated, ensureAdmin, async (
         });
     } catch (error: any) {
         console.error('❌ [Admin] Error resetting analysis pricing:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * GET /api/admin/billing/pricing-audit-log
+ * Retrieve audit trail for pricing changes
+ */
+router.get('/pricing-audit-log', ensureAuthenticated, ensureAdmin, async (req, res) => {
+    try {
+        const logs = await db
+            .select()
+            .from(adminProjectActions)
+            .where(
+                eq(adminProjectActions.entityType, 'other')
+            )
+            .orderBy(desc(adminProjectActions.createdAt))
+            .limit(100);
+
+        // Filter to pricing-related actions
+        const pricingLogs = logs.filter(log =>
+            log.action.includes('pricing') || log.action.includes('tier') || log.action.includes('billing')
+        );
+
+        res.json({
+            success: true,
+            logs: pricingLogs,
+            count: pricingLogs.length
+        });
+    } catch (error: any) {
+        console.error('❌ [Admin] Error fetching pricing audit log:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });

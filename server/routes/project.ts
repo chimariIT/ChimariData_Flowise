@@ -3487,7 +3487,22 @@ router.get("/:projectId/datasets", ensureAuthenticated, async (req, res) => {
                                     totalRowCount: joinResult.recordCount,
                                     columnCount: Object.keys(normalizedJoinedSchema || {}).length,
                                     joinInsights: joinInsights,
-                                    persistedAt: new Date().toISOString()
+                                    persistedAt: new Date().toISOString(),
+                                    // Join lineage: track which datasets and keys produced this join
+                                    lineage: {
+                                        primaryDatasetId: primaryDataset.id,
+                                        primaryDatasetName: primaryName,
+                                        secondaryDatasetIds: secondaryDatasets.map(d => d.id),
+                                        joinType: 'left',
+                                        joinKeys: Object.entries(joinKeys).map(([dsId, col]) => ({
+                                            datasetId: dsId,
+                                            column: col
+                                        })),
+                                        joinedAt: new Date().toISOString(),
+                                        resultRowCount: joinResult.recordCount,
+                                        resultColumnCount: Object.keys(normalizedJoinedSchema || {}).length,
+                                        joinedFields: joinResult.joinedFields || []
+                                    }
                                 }
                             });
                             console.log(`✅ [Datasets] Persisted joined schema to journeyProgress: ${Object.keys(normalizedJoinedSchema || {}).length} columns`);

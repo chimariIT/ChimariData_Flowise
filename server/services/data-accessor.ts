@@ -18,8 +18,9 @@
  */
 
 import { db } from '../db';
-import { datasets, projectDatasets } from '@shared/schema';
+import { datasets, projectDatasets, projects } from '@shared/schema';
 import { eq } from 'drizzle-orm';
+import { getPiiExcludedColumns } from './pii-helper';
 
 /**
  * P2-1 FIX: Normalize element field names to canonical `sourceColumn` format.
@@ -183,6 +184,80 @@ export class DataAccessorService {
     }
 
     return this.checkHasTransformations(dataset);
+  }
+
+  /**
+   * Get active data for a project with PII columns stripped.
+   * This is the recommended method for any data access that may be exposed to users
+   * or passed to analysis scripts, ensuring PII decisions are enforced at query time.
+   */
+  async getProjectDataPiiSafe(projectId: string): Promise<MultiDatasetResult> {
+    const result = await this.getProjectData(projectId);
+    if (!result.datasets.length) return result;
+
+    // Load PII decisions from journeyProgress
+    let piiExcludedColumns: string[] = [];
+    try {
+      if (db) {
+        const [project] = await db
+          .select()
+          .from(projects)
+          .where(eq(projects.id, projectId))
+          .limit(1);
+
+        if (project) {
+          const journeyProgress = (project as any).journeyProgress;
+          piiExcludedColumns = getPiiExcludedColumns(journeyProgress);
+        }
+      }
+    } catch (err) {
+      console.warn('[DataAccessor] Failed to load PII decisions, returning unfiltered data:', err);
+      return result;
+    }
+
+    if (piiExcludedColumns.length === 0) return result;
+
+    // Strip PII columns from all dataset rows and schemas
+    const filteredDatasets = result.datasets.map(ds => ({
+      ...ds,
+      data: ds.data.map(row => {
+        const filtered: any = {};
+        for (const key of Object.keys(row)) {
+          if (!piiExcludedColumns.includes(key)) {
+            filtered[key] = row[key];
+          }
+        }
+        return filtered;
+      }),
+      schema: ds.schema
+        ? Object.fromEntries(
+            Object.entries(ds.schema).filter(([key]) => !piiExcludedColumns.includes(key))
+          )
+        : ds.schema,
+    }));
+
+    return {
+      ...result,
+      datasets: filteredDatasets,
+      primaryDataset: filteredDatasets[0] || null,
+    };
+  }
+
+  /**
+   * Strip PII columns from a single data array given a project's PII decisions.
+   * Utility method for routes that already have the data but need PII enforcement.
+   */
+  static stripPiiColumns(data: any[], piiExcludedColumns: string[]): any[] {
+    if (!piiExcludedColumns.length || !data.length) return data;
+    return data.map(row => {
+      const filtered: any = {};
+      for (const key of Object.keys(row)) {
+        if (!piiExcludedColumns.includes(key)) {
+          filtered[key] = row[key];
+        }
+      }
+      return filtered;
+    });
   }
 
   /**

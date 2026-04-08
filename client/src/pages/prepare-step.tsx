@@ -16,7 +16,8 @@ import {
   BarChart3,
   Shield,
   AlertCircle,
-  Users
+  Users,
+  Loader2
 } from "lucide-react";
 import { useProject } from "@/hooks/useProject";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -596,7 +597,7 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
         industry: effectiveIndustry
       });
       const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Requirements generation timed out after 90 seconds. Please try again.')), 90000)
+        setTimeout(() => reject(new Error('Requirements generation is taking longer than expected. This can happen with complex goals — please try clicking Continue again or simplify your analysis goal.')), 90000)
       );
       const data = await Promise.race([requirementsPromise, timeoutPromise]) as any;
 
@@ -1404,6 +1405,19 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
                   return;
                 }
 
+                // Ambiguity gate: Recommend PM clarification for vague goals
+                // A short goal (<30 chars) or one with no specific metrics/KPIs is likely vague
+                const goalWords = analysisGoal.trim().split(/\s+/).length;
+                const hasSpecificMetric = /\b(revenue|churn|retention|engagement|conversion|satisfaction|NPS|ROI|cost|profit|margin|growth|turnover|attrition|CLV|ARPU|MRR|ARR)\b/i.test(analysisGoal);
+                if (goalWords < 6 && !hasSpecificMetric && !clarificationCompleted) {
+                  toast({
+                    title: "Goal May Be Too Vague",
+                    description: "Your analysis goal is very brief. Consider using the PM Agent above to refine your goals for better results, or add more detail.",
+                    variant: "default",
+                  });
+                  // Non-blocking — user can still proceed, but is warned
+                }
+
                 // FIX: Track the document from auto-generation so we can use it even before React state updates
                 let generatedDocument: any = null;
 
@@ -1555,13 +1569,13 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
             >
               {loadingDataElements ? (
                 <>
-                  <span className="animate-spin mr-2">⏳</span>
-                  Generating Requirements...
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Analyzing your goals & generating requirements...
                 </>
               ) : isUpdating ? (
                 <>
-                  <span className="animate-spin mr-2">⏳</span>
-                  Saving...
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Saving progress...
                 </>
               ) : (
                 <>

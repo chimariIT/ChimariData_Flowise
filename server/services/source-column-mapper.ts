@@ -78,7 +78,7 @@ export interface UserProvidedMapping {
 
 export class SourceColumnMapper {
   private embeddingCache: Map<string, number[]> = new Map();
-  private readonly CONFIDENCE_THRESHOLD = 50; // Minimum confidence to accept auto-match
+  private readonly CONFIDENCE_THRESHOLD = 70; // Minimum confidence to accept auto-match (raised from 50 to reduce incorrect mappings)
 
   /**
    * Auto-map abstract column names to actual dataset columns

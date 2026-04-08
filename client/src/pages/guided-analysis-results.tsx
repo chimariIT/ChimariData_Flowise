@@ -5,17 +5,19 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
-import { 
-  CheckCircle, 
-  Clock, 
-  AlertCircle, 
-  Download, 
-  BarChart3, 
-  Brain, 
+import {
+  CheckCircle,
+  Clock,
+  AlertCircle,
+  Download,
+  BarChart3,
+  Brain,
   ArrowLeft,
-  Loader2
+  Loader2,
+  RefreshCw
 } from 'lucide-react';
 import { apiClient } from '@/lib/api';
+import { realtimeClient } from '@/lib/realtime';
 
 interface AnalysisResult {
   analysisId: string;
@@ -39,15 +41,33 @@ const GuidedAnalysisResults: React.FC = () => {
   useEffect(() => {
     if (match && params?.analysisId) {
       fetchAnalysisResults(params.analysisId);
-      
-      // Set up polling for in-progress analyses
+
+      // Subscribe to real-time updates via WebSocket (preferred over polling)
+      const unsubscribe = realtimeClient.subscribe(
+        `analysis:${params.analysisId}`,
+        (event: any) => {
+          if (event.data?.status) {
+            setAnalysis(prev => prev ? { ...prev, ...event.data } : event.data);
+            // If completed or failed, fetch full results
+            if (event.data.status === 'completed' || event.data.status === 'failed') {
+              fetchAnalysisResults(params.analysisId);
+            }
+          }
+        },
+        { persistent: true }
+      );
+
+      // Fallback polling for when WebSocket is unavailable
       const pollInterval = setInterval(() => {
         if (analysis?.status === 'processing') {
           fetchAnalysisResults(params.analysisId);
         }
-      }, 5000);
+      }, 10000); // Reduced frequency since WebSocket handles real-time updates
 
-      return () => clearInterval(pollInterval);
+      return () => {
+        unsubscribe();
+        clearInterval(pollInterval);
+      };
     }
   }, [match, params?.analysisId, analysis?.status]);
 
@@ -218,9 +238,36 @@ const GuidedAnalysisResults: React.FC = () => {
                 <p className="text-gray-600 mb-4">
                   {analysis.error || 'An error occurred while processing your analysis.'}
                 </p>
-                <Button onClick={() => setLocation('/dashboard')}>
-                  Back to Dashboard
-                </Button>
+                <div className="flex items-center justify-center gap-3">
+                  <Button
+                    variant="default"
+                    onClick={async () => {
+                      try {
+                        setLoading(true);
+                        toast({ title: "Retrying Analysis", description: "Re-submitting your analysis for processing..." });
+                        await apiClient.post(`/api/guided-analysis/${analysis.analysisId}/retry`, {});
+                        // Refresh results to show new status
+                        await fetchAnalysisResults(analysis.analysisId);
+                      } catch (retryError: any) {
+                        console.error('Retry failed:', retryError);
+                        toast({
+                          title: "Retry Failed",
+                          description: retryError.message || "Could not retry analysis. Please try again from the dashboard.",
+                          variant: "destructive"
+                        });
+                      } finally {
+                        setLoading(false);
+                      }
+                    }}
+                  >
+                    <RefreshCw className="w-4 h-4 mr-2" />
+                    Retry Analysis
+                  </Button>
+                  <Button variant="outline" onClick={() => setLocation('/dashboard')}>
+                    <ArrowLeft className="w-4 h-4 mr-2" />
+                    Back to Dashboard
+                  </Button>
+                </div>
               </div>
             </CardContent>
           </Card>

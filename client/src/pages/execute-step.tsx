@@ -1143,13 +1143,27 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         const costResponse = await apiClient.get(`/api/projects/${projectId}/cost-estimate`);
         const cost = costResponse.estimatedCost || costResponse.totalCost || 0;
         setEstimatedCost(cost);
+
+        // Fetch quota status to warn about overages
+        try {
+          const quotaResponse = await apiClient.get(`/api/billing/quota-status`);
+          if (quotaResponse?.isExceeded || (quotaResponse?.remaining !== undefined && quotaResponse.remaining <= 0)) {
+            toast({
+              title: "Quota Limit Reached",
+              description: `You've used ${quotaResponse.used || 0} of ${quotaResponse.quota || 0} analyses this period. This execution may incur overage charges.`,
+              variant: "default",
+            });
+          }
+        } catch {
+          // Quota check is informational — don't block
+        }
+
         setShowCostConfirmation(true);
         setCostLoading(false);
         return; // Wait for user to confirm in dialog
       } catch (costError) {
         console.warn('Cost estimate unavailable, proceeding without confirmation:', costError);
-        // ✅ P1-4 FIX: Do NOT return here - proceed with execution even if cost estimate fails
-        // The old code had `return;` after this catch block which blocked execution
+        // P1-4 FIX: Do NOT return here - proceed with execution even if cost estimate fails
         toast({
           title: "Cost Estimate Unavailable",
           description: "Unable to retrieve cost estimate. Proceeding with execution.",

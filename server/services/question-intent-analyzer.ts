@@ -354,7 +354,7 @@ export class QuestionIntentAnalyzer {
    * Extract structural metadata from the question.
    */
   private extractMetadata(lower: string): QuestionIntent['metadata'] {
-    const hasTemporal = /\b(?:over\s+time|trend|monthly|quarterly|yearly|weekly|daily|seasonal|change(?:d|s)?\s+over|growth|decline)\b/i.test(lower);
+    const hasTemporal = /\b(?:over\s+time|trend|monthly|quarterly|yearly|weekly|daily|seasonal|change(?:d|s)?\s+over|growth|decline|year[\s-]over[\s-]year|month[\s-]over[\s-]month|quarter[\s-]over[\s-]quarter|last\s+(?:few\s+)?(?:days?|weeks?|months?|quarters?|years?)|past\s+(?:few\s+)?(?:days?|weeks?|months?|quarters?|years?)|recently|recent|YTD|MTD|QTD)\b/i.test(lower);
     const hasComparison = /\b(?:compare|versus|vs\.?|differ|between\s+\w+\s+and|better|worse)\b/i.test(lower);
 
     // Extract grouping dimensions
@@ -392,16 +392,50 @@ export class QuestionIntentAnalyzer {
 
   /**
    * Detect temporal scope from question text.
+   * Enhanced: Handles relative time references ("recent", "last quarter", "past year")
+   * and ambiguous temporal language by resolving to explicit scope + flagging ambiguity.
    */
   private detectTemporalScope(lower: string): string | undefined {
-    const scopes: Record<string, string> = {
+    // Explicit scope keywords (high confidence)
+    const explicitScopes: Record<string, string> = {
       'daily': 'day', 'weekly': 'week', 'monthly': 'month',
       'quarterly': 'quarter', 'yearly': 'year', 'annually': 'year',
       'seasonal': 'season', 'over time': 'time_series',
     };
-    for (const [keyword, scope] of Object.entries(scopes)) {
+    for (const [keyword, scope] of Object.entries(explicitScopes)) {
       if (lower.includes(keyword)) return scope;
     }
+
+    // Relative time references (medium confidence — resolve to best-guess scope)
+    const relativePatterns: Array<{ pattern: RegExp; scope: string }> = [
+      { pattern: /\blast\s+(few\s+)?days?\b/, scope: 'day' },
+      { pattern: /\blast\s+(few\s+)?weeks?\b/, scope: 'week' },
+      { pattern: /\blast\s+(few\s+)?months?\b/, scope: 'month' },
+      { pattern: /\blast\s+(few\s+)?quarters?\b/, scope: 'quarter' },
+      { pattern: /\blast\s+(few\s+)?years?\b/, scope: 'year' },
+      { pattern: /\bpast\s+(few\s+)?days?\b/, scope: 'day' },
+      { pattern: /\bpast\s+(few\s+)?weeks?\b/, scope: 'week' },
+      { pattern: /\bpast\s+(few\s+)?months?\b/, scope: 'month' },
+      { pattern: /\bpast\s+(few\s+)?quarters?\b/, scope: 'quarter' },
+      { pattern: /\bpast\s+(few\s+)?years?\b/, scope: 'year' },
+      { pattern: /\byear[\s-]over[\s-]year\b/, scope: 'year' },
+      { pattern: /\bmonth[\s-]over[\s-]month\b/, scope: 'month' },
+      { pattern: /\bquarter[\s-]over[\s-]quarter\b/, scope: 'quarter' },
+      { pattern: /\bweek[\s-]over[\s-]week\b/, scope: 'week' },
+      { pattern: /\bYTD\b|\byear[\s-]to[\s-]date\b/i, scope: 'year' },
+      { pattern: /\bQTD\b|\bquarter[\s-]to[\s-]date\b/i, scope: 'quarter' },
+      { pattern: /\bMTD\b|\bmonth[\s-]to[\s-]date\b/i, scope: 'month' },
+    ];
+
+    for (const { pattern, scope } of relativePatterns) {
+      if (pattern.test(lower)) return scope;
+    }
+
+    // Ambiguous temporal hints — resolve to time_series (requires datetime column)
+    if (/\b(recently|recent|latest|current|now|today|this period|last period)\b/.test(lower)) {
+      return 'time_series';
+    }
+
     return undefined;
   }
 
