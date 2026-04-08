@@ -28,7 +28,6 @@ import {
 } from "lucide-react";
 import { apiClient } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
-import { apiClient } from "@/lib/api";
 
 export default function UserManagement() {
   const { toast } = useToast();
@@ -66,9 +65,47 @@ export default function UserManagement() {
     },
   });
 
-  // Note: Toggle admin is now handled via role assignment/revoke in Python backend
+  // Toggle admin via role update
+  const toggleAdminMutation = useMutation({
+    mutationFn: async ({ userId, isAdmin }: { userId: string; isAdmin: boolean }) => {
+      return apiClient.put(`/api/v1/admin/users/${userId}`, { isAdmin });
+    },
+    onSuccess: () => {
+      toast({ title: "Admin Status Updated" });
+      queryClient.invalidateQueries({ queryKey: ['/api/v1/admin/users'] });
+    },
+    onError: (err: any) => {
+      toast({ title: "Error", description: err.message || "Failed to toggle admin", variant: "destructive" });
+    },
+  });
 
-  // Note: Subscription and credit management handled through Python backend billing service
+  // Change subscription tier
+  const changeSubscriptionMutation = useMutation({
+    mutationFn: async ({ userId, tier }: { userId: string; tier: string }) => {
+      return apiClient.put(`/api/v1/admin/users/${userId}`, { subscriptionTier: tier });
+    },
+    onSuccess: () => {
+      toast({ title: "Subscription Updated" });
+      queryClient.invalidateQueries({ queryKey: ['/api/v1/admin/users'] });
+    },
+    onError: (err: any) => {
+      toast({ title: "Error", description: err.message || "Failed to change subscription", variant: "destructive" });
+    },
+  });
+
+  // Award/revoke credits
+  const awardCreditsMutation = useMutation({
+    mutationFn: async ({ userId, amount, reason }: { userId: string; amount: number; reason: string }) => {
+      return apiClient.post(`/api/v1/admin/users/${userId}/credits`, { amount, reason });
+    },
+    onSuccess: () => {
+      toast({ title: "Credits Updated" });
+      queryClient.invalidateQueries({ queryKey: ['/api/v1/admin/users'] });
+    },
+    onError: (err: any) => {
+      toast({ title: "Error", description: err.message || "Failed to award credits", variant: "destructive" });
+    },
+  });
 
   const getTierBadgeColor = (tier: string) => {
     switch (tier?.toLowerCase()) {
@@ -89,7 +126,7 @@ export default function UserManagement() {
             User Management
           </CardTitle>
           <CardDescription>
-            Manage platform users, roles, subscriptions, and credits. Total: {totalCount} users
+            Manage platform users, roles, subscriptions, and credits. Total: {total} users
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -129,7 +166,7 @@ export default function UserManagement() {
             </Alert>
           )}
 
-          {isLoading ? (
+          {loading ? (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="w-6 h-6 animate-spin mr-2" />
               Loading users...
@@ -237,7 +274,7 @@ export default function UserManagement() {
               {totalPages > 1 && (
                 <div className="flex items-center justify-between mt-4">
                   <div className="text-sm text-gray-500">
-                    Page {page} of {totalPages} ({totalCount} users)
+                    Page {page} of {totalPages} ({total} users)
                   </div>
                   <div className="flex gap-2">
                     <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>

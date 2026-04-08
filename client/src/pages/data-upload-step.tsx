@@ -983,7 +983,7 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
     setPiiDetectionResult(null);
 
     const newlyUploadedFileIds: string[] = [];
-    let latestProjectId = localStorage.getItem('currentProjectId') || null;
+    let currentProjectId = localStorage.getItem('currentProjectId') || null;
 
     try {
       for (let index = 0; index < files.length; index += 1) {
@@ -1009,10 +1009,10 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
         let data: any;
         try {
           // AUTO-CREATE PROJECT ON FIRST FILE UPLOAD
-          if (latestProjectId && index > 0) {
+          if (currentProjectId && index > 0) {
             // Add file to existing project
-            console.log(`📤 [Upload] Adding file ${index + 1} to existing project: ${latestProjectId}`);
-            data = await apiClient.uploadFileToProject(latestProjectId, file);
+            console.log(`📤 [Upload] Adding file ${index + 1} to existing project: ${currentProjectId}`);
+            data = await apiClient.uploadFileToProject(currentProjectId, file);
           } else {
             // Create new project with first file (auto-create on upload)
             console.log(`📤 [Upload] Creating new project with file: ${file.name}, journeyType: ${normalizedJourneyType}`);
@@ -1036,7 +1036,7 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
           }
 
           uploadNetworkMetric?.end('success', {
-            projectId: data.projectId || latestProjectId,
+            projectId: data.projectId || currentProjectId,
             requiresPIIDecision: !!data.requiresPIIDecision
           });
         } catch (error: any) {
@@ -1055,7 +1055,7 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
 
         // Update project ID on first file (project was auto-created)
         if (data.projectId && index === 0) {
-          latestProjectId = data.projectId;
+          currentProjectId = data.projectId;
           localStorage.setItem('currentProjectId', data.projectId);
           setCurrentProjectId(data.projectId);
 
@@ -1226,19 +1226,19 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
       setUploadStatus('completed');
       setUploadProgress(100);
 
-      if (latestProjectId) {
-        setCurrentProjectId(latestProjectId);
+      if (currentProjectId) {
+        setCurrentProjectId(currentProjectId);
         // FIX: Invalidate cache after upload to ensure fresh data in subsequent steps
-        queryClient.invalidateQueries({ queryKey: ["project", latestProjectId] });
-        queryClient.invalidateQueries({ queryKey: ["datasets", latestProjectId] });
+        queryClient.invalidateQueries({ queryKey: ["project", currentProjectId] });
+        queryClient.invalidateQueries({ queryKey: ["datasets", currentProjectId] });
         await refreshProjectPreview();
       }
 
       if (newlyUploadedFileIds.length > 0) {
         const combinedFileIds = [...uploadedFileIds, ...newlyUploadedFileIds];
         setUploadedFileIds(combinedFileIds);
-        if (latestProjectId) {
-          await fetchAgentRecommendations(latestProjectId, combinedFileIds);
+        if (currentProjectId) {
+          await fetchAgentRecommendations(currentProjectId, combinedFileIds);
         }
       }
     } catch (error: any) {
@@ -1518,8 +1518,8 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
           <TabsContent value="database">
             <div className="py-4">
               <DatabaseConnectorTab
-                projectId={latestProjectId || ''}
-                onDataIngested={(result: any) => {
+                projectId={currentProjectId || ''}
+                onComplete={(result: any) => {
                   if (result?.success) {
                     setUploadStatus('completed');
                     toast({
@@ -1534,8 +1534,8 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
           <TabsContent value="api">
             <div className="py-4">
               <APIConnectorTab
-                projectId={latestProjectId || ''}
-                onDataIngested={(result: any) => {
+                projectId={currentProjectId || ''}
+                onComplete={(result: any) => {
                   if (result?.success) {
                     setUploadStatus('completed');
                     toast({

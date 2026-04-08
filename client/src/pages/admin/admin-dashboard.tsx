@@ -246,7 +246,7 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
           <CardContent>
             <div className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {(tierData && tierData.length > 0 ? tierData : [
+                {([
                   { displayName: 'Trial', pricing: { monthly: 1 }, quotas: { maxProjects: 1, maxAnalyses: 3 }, description: 'Basic features' },
                   { displayName: 'Starter', pricing: { monthly: 10 }, quotas: { maxProjects: 5, maxAnalyses: 30 }, description: 'All journey types' },
                   { displayName: 'Professional', pricing: { monthly: 20 }, quotas: { maxProjects: 25, maxAnalyses: 300 }, description: 'Priority support' },
