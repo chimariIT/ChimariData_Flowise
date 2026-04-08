@@ -504,6 +504,28 @@ export default function DataVerificationStep({
         throw new Error('No project ID found');
       }
 
+      // Validate: Ensure data was actually loaded
+      if (!projectData?.preview || projectData.preview.length === 0) {
+        toast({
+          title: "No Data Available",
+          description: "Please go back and upload your data before proceeding.",
+          variant: "destructive"
+        });
+        setIsProcessing(false);
+        return;
+      }
+
+      // Validate: Warn if requirements document is missing (downstream steps need it)
+      if (!requiredDataElements) {
+        toast({
+          title: "Requirements Not Generated",
+          description: "Analysis requirements haven't been generated yet. Please go back to the Prepare step and ensure your goals are saved.",
+          variant: "destructive"
+        });
+        setIsProcessing(false);
+        return;
+      }
+
       // Mark project as verified
       await apiClient.put(`/api/projects/${projectId}/verify`, {
         verificationStatus: 'approved',

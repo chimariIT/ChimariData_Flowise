@@ -689,6 +689,112 @@ row['${kpiName}'] = (function() {
   }
 
   /**
+   * Validate compiled transformations without executing them.
+   * Checks for:
+   *   - Empty or missing source columns
+   *   - Missing Python code
+   *   - Unresolved dependencies (referencing non-existent elements)
+   *   - Circular dependencies (via topological sort)
+   *   - Dangerous code patterns (import os, exec, eval, subprocess)
+   *
+   * Returns a list of validation issues. Empty array = valid.
+   */
+  validateTransformations(
+    transformations: CompiledTransformation[],
+    availableColumns?: string[]
+  ): Array<{ elementId: string; elementName: string; severity: 'error' | 'warning'; message: string }> {
+    const issues: Array<{ elementId: string; elementName: string; severity: 'error' | 'warning'; message: string }> = [];
+    const elementIds = new Set(transformations.map(t => t.elementId));
+
+    for (const t of transformations) {
+      // Check for empty source columns
+      if (!t.sourceColumns || t.sourceColumns.length === 0) {
+        issues.push({
+          elementId: t.elementId,
+          elementName: t.elementName,
+          severity: 'warning',
+          message: `No source columns mapped for "${t.elementName}". Transformation may produce empty results.`
+        });
+      }
+
+      // Check source columns exist in available data
+      if (availableColumns && t.sourceColumns) {
+        for (const col of t.sourceColumns) {
+          if (!availableColumns.includes(col) && !elementIds.has(col)) {
+            issues.push({
+              elementId: t.elementId,
+              elementName: t.elementName,
+              severity: 'error',
+              message: `Source column "${col}" not found in dataset for "${t.elementName}".`
+            });
+          }
+        }
+      }
+
+      // Check for missing Python code
+      if (!t.code?.python || t.code.python.trim().length === 0) {
+        issues.push({
+          elementId: t.elementId,
+          elementName: t.elementName,
+          severity: 'error',
+          message: `No Python code generated for "${t.elementName}". Cannot execute transformation.`
+        });
+      }
+
+      // Check for dangerous code patterns
+      if (t.code?.python) {
+        const dangerousPatterns = [
+          /\bimport\s+os\b/,
+          /\bimport\s+subprocess\b/,
+          /\bimport\s+sys\b/,
+          /\b__import__\b/,
+          /\beval\s*\(/,
+          /\bexec\s*\(/,
+          /\bos\.\w+/,
+          /\bsubprocess\.\w+/,
+          /\bopen\s*\(/,
+        ];
+        for (const pattern of dangerousPatterns) {
+          if (pattern.test(t.code.python)) {
+            issues.push({
+              elementId: t.elementId,
+              elementName: t.elementName,
+              severity: 'error',
+              message: `Potentially unsafe code pattern detected in "${t.elementName}": ${pattern.source}`
+            });
+          }
+        }
+      }
+
+      // Check for unresolved dependencies
+      for (const dep of t.dependencies) {
+        if (!elementIds.has(dep)) {
+          issues.push({
+            elementId: t.elementId,
+            elementName: t.elementName,
+            severity: 'error',
+            message: `Unresolved dependency "${dep}" for "${t.elementName}". Required element not in compilation set.`
+          });
+        }
+      }
+    }
+
+    // Check for circular dependencies
+    try {
+      this.topologicalSort(transformations);
+    } catch (circularError: any) {
+      issues.push({
+        elementId: 'circular',
+        elementName: 'Dependency Graph',
+        severity: 'error',
+        message: circularError.message || 'Circular dependency detected among transformations.'
+      });
+    }
+
+    return issues;
+  }
+
+  /**
    * P0-5: Generate analysis-type-specific data preparation hints
    * These hints tell the Python execution scripts what prep is needed
    */
