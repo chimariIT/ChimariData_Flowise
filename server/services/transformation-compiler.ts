@@ -96,20 +96,116 @@ export interface ElementForCompilation {
   dataType?: string;
 }
 
+/**
+ * Question-to-element mapping from pipeline-question-mapping-builder
+ */
+export interface QuestionAnswerMapping {
+  questionId: string;
+  questionText: string;
+  elementIds: string[];
+  answerId?: string;
+  answerText?: string;
+  confidence?: number;
+}
+
+/**
+ * Business context from project metadata
+ */
+export interface BusinessContext {
+  industry?: string;
+  companySize?: string;
+  region?: string;
+  businessGoals?: string[];
+  constraints?: string[];
+  kpiDefinitions?: Record<string, {
+    conceptName: string;
+    displayName?: string;
+    formula: string;
+    componentFields: string[];
+    componentFieldDescriptors?: any[];
+    aggregationMethod?: string;
+  }>;
+}
+
+/**
+ * Project metadata for compilation
+ */
+export interface ProjectMetadata {
+  projectId: string;
+  projectName?: string;
+  userId?: string;
+  createdAt?: Date;
+}
+
+/**
+ * P0-5: CompilationContext - Pass question/business context through compilation pipeline
+ *
+ * This context enables the compiler to:
+ * - Resolve business definitions using businessContext.kpiDefinitions
+ * - Apply date-aware calculations using dateContext
+ * - Generate analysis-appropriate transformations using analysisTypes
+ * - Trace elements back to source questions using questionAnswerMapping
+ */
+export interface CompilationContext {
+  questionAnswerMapping?: Map<string, QuestionAnswerMapping>;
+  businessContext?: BusinessContext;
+  dateContext?: DateContext;
+  analysisTypes?: string[];
+  projectMetadata?: ProjectMetadata;
+}
+
 const SMALL_DATASET_THRESHOLD = 100_000;
 const MEDIUM_DATASET_THRESHOLD = 10_000_000;
 
 export class TransformationCompiler {
   /**
-   * Compile a single element's transformation
+   * P0-5: Compile a single element's transformation with context
+   *
+   * @param element - Element to compile
+   * @param columnMappings - Abstract column name to actual column name mapping
+   * @param rowCount - Number of rows in dataset (for engine selection)
+   * @param context - Compilation context with question/business information
    */
   compileElement(
     element: ElementForCompilation,
     columnMappings: Map<string, string>,  // abstract -> actual
-    rowCount: number
+    rowCount: number,
+    context?: CompilationContext
   ): CompiledTransformation {
     const calcDef = element.calculationDefinition;
-    const formula = calcDef?.formula;
+    const kpiDef = context?.businessContext?.kpiDefinitions?.[element.elementName];
+    const formula = { ...(calcDef?.formula || {}) } as NonNullable<ElementForCompilation['calculationDefinition']>['formula'];
+
+    if (kpiDef) {
+      if (!formula?.componentFields?.length && Array.isArray(kpiDef.componentFields) && kpiDef.componentFields.length > 0) {
+        formula.componentFields = kpiDef.componentFields;
+      }
+      if (!formula?.aggregationMethod && kpiDef.aggregationMethod) {
+        formula.aggregationMethod = kpiDef.aggregationMethod;
+      }
+      if (!formula?.pseudoCode && kpiDef.formula) {
+        formula.pseudoCode = kpiDef.formula;
+      }
+      if (!formula?.businessDescription && kpiDef.displayName) {
+        formula.businessDescription = kpiDef.displayName;
+      }
+    }
+
+    // P0-5: Log compilation with context for debugging
+    if (context?.questionAnswerMapping) {
+      const relatedQuestions = Array.from(context.questionAnswerMapping.values())
+        .filter(mapping => mapping.elementIds.includes(element.elementId));
+      if (relatedQuestions.length > 0) {
+        console.log(`📋 [Compiler] Compiling element "${element.elementName}" for questions: ${relatedQuestions.map(q => q.questionText.substring(0, 50) + '...').join(', ')}`);
+      }
+    }
+
+    // P0-5: Resolve business definition if available in context
+    let businessDefinition = formula?.businessDescription;
+    if (kpiDef) {
+      businessDefinition = kpiDef.businessDescription || businessDefinition;
+      console.log(`📊 [Compiler] Using business definition from context for "${element.elementName}"`);
+    }
 
     // Determine execution engine based on row count
     const engine = this.selectEngine(rowCount);
@@ -129,12 +225,13 @@ export class TransformationCompiler {
       sourceColumns,
       aggregationMethod,
       formula?.pseudoCode,
-      engine
+      engine,
+      context
     );
 
     // Generate JavaScript code for small datasets
     const jsCode = engine === 'javascript'
-      ? this.generateJavaScriptCode(element.elementName, sourceColumns, aggregationMethod)
+      ? this.generateJavaScriptCode(element.elementName, sourceColumns, aggregationMethod, context)
       : undefined;
 
     return {
@@ -154,7 +251,7 @@ export class TransformationCompiler {
       // in compileElements() post-processing with the full allElements array.
       // If called standalone, caller must resolve dependencies separately.
       dependencies: [],
-      businessDescription: formula?.businessDescription
+      businessDescription: businessDescription
     };
   }
 
@@ -183,12 +280,19 @@ export class TransformationCompiler {
 
   /**
    * Phase 3B: Compile a multi-step KPI from a business definition with descriptors.
+   * P0-5: Accepts and passes compilation context
    *
    * For turnover rate, this generates ordered steps:
    * 1. (row_level) _is_separated = 1 IF termination_date IS NOT NULL ELSE 0
    * 2. (cross_row_aggregate) _separation_count = GROUP BY groupByColumns, SUM(_is_separated)
    * 3. (cross_row_aggregate) _employee_count = GROUP BY groupByColumns, COUNT(*)
    * 4. (formula_apply) Turnover_Rate = (_separation_count / _employee_count) * 100
+   *
+   * @param definition - Business definition of the KPI
+   * @param columnMappings - Abstract column name to actual column name mapping
+   * @param groupByColumns - Columns to group by (from question decomposition dimensions)
+   * @param rowCount - Number of rows in dataset (for engine selection)
+   * @param context - Compilation context with question/business information
    */
   compileMultiStepKPI(
     definition: {
@@ -201,7 +305,8 @@ export class TransformationCompiler {
     },
     columnMappings: Map<string, string>,  // abstract → actual column name
     groupByColumns: string[],             // From question decomposition dimensions
-    rowCount: number
+    rowCount: number,
+    context?: CompilationContext
   ): CompiledTransformation[] {
     const engine = this.selectEngine(rowCount);
     const steps: CompiledTransformation[] = [];
@@ -390,6 +495,7 @@ row['${kpiName}'] = (function() {
 
   /**
    * Phase 5: Generate hierarchical comparison steps.
+   * P0-5: Accepts and passes compilation context
    *
    * When comparing group-level KPI to a baseline (e.g., per-leader turnover vs company turnover):
    * 1. Compute the KPI at detail level (already done by compileMultiStepKPI with groupByColumns)
@@ -397,8 +503,12 @@ row['${kpiName}'] = (function() {
    * 3. Add a comparison column: difference = detail_rate - baseline_rate
    *
    * @param kpiSteps - The steps from compileMultiStepKPI() for the detail level
+   * @param definition - Business definition of the KPI
+   * @param columnMappings - Abstract column name to actual column name mapping
    * @param baselineGroupByColumns - Grouping columns for baseline ([] for overall)
+   * @param rowCount - Number of rows in dataset (for engine selection)
    * @param comparisonLabel - Label for the comparison (e.g., "vs Company Average")
+   * @param context - Compilation context with question/business information
    */
   compileHierarchicalComparison(
     kpiSteps: CompiledTransformation[],
@@ -412,19 +522,21 @@ row['${kpiName}'] = (function() {
     columnMappings: Map<string, string>,
     baselineGroupByColumns: string[],
     rowCount: number,
-    comparisonLabel: string = 'Baseline'
+    comparisonLabel: string = 'Baseline',
+    context?: CompilationContext
   ): CompiledTransformation[] {
     const engine = this.selectEngine(rowCount);
     const kpiName = this.sanitizeColumnName(definition.displayName || definition.conceptName);
     const baselineKpiName = `_${kpiName}_baseline`;
     const diffColName = `${kpiName}_vs_${comparisonLabel.replace(/\s+/g, '_')}`;
 
-    // Generate the baseline-level KPI steps (same formula, different/no grouping)
+    // P0-5: Generate the baseline-level KPI steps with context (same formula, different/no grouping)
     const baselineSteps = this.compileMultiStepKPI(
       definition,
       columnMappings,
       baselineGroupByColumns,
-      rowCount
+      rowCount,
+      context
     );
 
     // Rename targets to avoid collision with detail-level columns
@@ -492,14 +604,30 @@ row['${kpiName}'] = (function() {
   /**
    * Compile multiple elements into an execution plan
    * Phase 3C: Now resolves inter-element dependencies
+   * P0-5: Accepts and passes compilation context
    */
   compileElements(
     elements: ElementForCompilation[],
     columnMappings: Map<string, string>,
-    rowCount: number
+    rowCount: number,
+    context?: CompilationContext
   ): CompiledTransformation[] {
     const compilable = elements.filter(el => el.calculationDefinition?.formula?.componentFields);
-    const compiled = compilable.map(el => this.compileElement(el, columnMappings, rowCount));
+    const compiled = compilable.map(el => this.compileElement(el, columnMappings, rowCount, context));
+
+    // P0-5: Log context summary
+    if (context) {
+      console.log(`📋 [Compiler] Compiling ${compilable.length} elements with context:`);
+      if (context.questionAnswerMapping?.size) {
+        console.log(`   - Question-answer mappings: ${context.questionAnswerMapping.size}`);
+      }
+      if (context.businessContext?.kpiDefinitions) {
+        console.log(`   - Business definitions: ${Object.keys(context.businessContext.kpiDefinitions).length}`);
+      }
+      if (context.analysisTypes) {
+        console.log(`   - Analysis types: ${context.analysisTypes.join(', ')}`);
+      }
+    }
 
     // Phase 3C: Post-process to resolve cross-element dependencies
     for (const t of compiled) {
@@ -514,9 +642,15 @@ row['${kpiName}'] = (function() {
   }
 
   /**
-   * Build execution plan with dependency ordering
+   * P0-5: Build execution plan with dependency ordering and context
+   *
+   * @param transformations - Compiled transformations to order
+   * @param context - Optional compilation context for analysis data prep
    */
-  buildExecutionPlan(transformations: CompiledTransformation[]): ExecutionPlan {
+  buildExecutionPlan(
+    transformations: CompiledTransformation[],
+    context?: CompilationContext
+  ): ExecutionPlan {
     // Topological sort based on dependencies
     const sorted = this.topologicalSort(transformations);
 
@@ -538,11 +672,19 @@ row['${kpiName}'] = (function() {
       }
     });
 
+    // P0-5: Generate analysis data preparation hints from context
+    let analysisDataPrep: AnalysisDataPrep[] | undefined;
+    if (context?.analysisTypes && context.analysisTypes.length > 0) {
+      analysisDataPrep = TransformationCompiler.getAnalysisDataPrep(context.analysisTypes);
+      console.log(`📊 [Compiler] Generated ${analysisDataPrep.length} analysis data prep hints`);
+    }
+
     return {
       orderedSteps: sorted,
       totalSteps: sorted.length,
       estimatedComplexity: complexity,
-      primaryEngine
+      primaryEngine,
+      analysisDataPrep
     };
   }
 
@@ -658,14 +800,22 @@ row['${kpiName}'] = (function() {
   }
 
   /**
-   * Generate Python code from aggregation method
+   * P0-5: Generate Python code from aggregation method with context
+   *
+   * @param targetColumn - Name of the target column to create
+   * @param sourceColumns - Source column names to use in calculation
+   * @param aggregationMethod - Aggregation method to apply (mean, sum, etc.)
+   * @param pseudoCode - Optional pseudo-code template to use
+   * @param engine - Python engine to use (pandas, polars)
+   * @param context - Compilation context for enhanced code generation
    */
   private generatePythonCode(
     targetColumn: string,
     sourceColumns: string[],
     aggregationMethod: string,
     pseudoCode?: string,
-    engine: string = 'pandas'
+    engine: string = 'pandas',
+    context?: CompilationContext
   ): string {
     const targetCol = this.sanitizeColumnName(targetColumn);
     const colList = sourceColumns.map(c => `'${this.escapeColumn(c)}'`).join(', ');
@@ -765,12 +915,18 @@ df['${targetCol}'] = _weighted_sum / _weight_sum
   }
 
   /**
-   * Generate JavaScript code for small datasets
+   * P0-5: Generate JavaScript code for small datasets with context
+   *
+   * @param targetColumn - Name of the target column to create
+   * @param sourceColumns - Source column names to use in calculation
+   * @param aggregationMethod - Aggregation method to apply (mean, sum, etc.)
+   * @param context - Compilation context for enhanced code generation
    */
   private generateJavaScriptCode(
     targetColumn: string,
     sourceColumns: string[],
-    aggregationMethod: string
+    aggregationMethod: string,
+    context?: CompilationContext
   ): string {
     const targetCol = this.sanitizeColumnName(targetColumn);
     const colArray = JSON.stringify(sourceColumns);

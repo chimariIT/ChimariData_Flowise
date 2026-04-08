@@ -12,6 +12,7 @@
 import {
   EmbeddingProviderRegistry,
   OpenAIEmbeddingProvider,
+  OpenRouterEmbeddingProvider,
   GeminiEmbeddingProvider,
   OllamaEmbeddingProvider,
   TogetherEmbeddingProvider,
@@ -41,6 +42,7 @@ class EmbeddingService {
 
     // Register all providers
     this.registry.register(new OpenAIEmbeddingProvider());
+    this.registry.register(new OpenRouterEmbeddingProvider());
     this.registry.register(new GeminiEmbeddingProvider());
     this.registry.register(new OllamaEmbeddingProvider());
     this.registry.register(new TogetherEmbeddingProvider());
@@ -102,7 +104,7 @@ class EmbeddingService {
 
     if (providers.length === 0) {
       throw new Error(
-        'No embedding provider configured. Set OPENAI_API_KEY, GOOGLE_AI_API_KEY, OLLAMA_BASE_URL, TOGETHER_API_KEY, HUGGINGFACE_API_KEY, or COHERE_API_KEY.'
+        'No embedding provider configured. Set OPENAI_API_KEY, OPENROUTER_API_KEY, GOOGLE_AI_API_KEY, OLLAMA_BASE_URL, TOGETHER_API_KEY, HUGGINGFACE_API_KEY, or COHERE_API_KEY.'
       );
     }
 
@@ -145,7 +147,7 @@ class EmbeddingService {
 
     if (providers.length === 0) {
       throw new Error(
-        'No embedding provider configured. Set OPENAI_API_KEY, GOOGLE_AI_API_KEY, OLLAMA_BASE_URL, TOGETHER_API_KEY, HUGGINGFACE_API_KEY, or COHERE_API_KEY.'
+        'No embedding provider configured. Set OPENAI_API_KEY, OPENROUTER_API_KEY, GOOGLE_AI_API_KEY, OLLAMA_BASE_URL, TOGETHER_API_KEY, HUGGINGFACE_API_KEY, or COHERE_API_KEY.'
       );
     }
 
@@ -221,7 +223,7 @@ embeddingService.loadPersistedConfig().then(() => {
   } else {
     console.warn(
       `⚠️ [Embedding] No embedding providers configured — semantic matching will use hash fallback only. ` +
-      `Set OPENAI_API_KEY, GOOGLE_AI_API_KEY, OLLAMA_BASE_URL, TOGETHER_API_KEY, HUGGINGFACE_API_KEY, or COHERE_API_KEY.`
+      `Set OPENAI_API_KEY, OPENROUTER_API_KEY, GOOGLE_AI_API_KEY, OLLAMA_BASE_URL, TOGETHER_API_KEY, HUGGINGFACE_API_KEY, or COHERE_API_KEY.`
     );
   }
 }).catch(() => { /* Non-fatal — config loaded lazily on first embed call */ });

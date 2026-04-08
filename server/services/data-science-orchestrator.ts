@@ -2196,10 +2196,16 @@ export class DataScienceOrchestrator {
         const threshold = 0.7; // Minimum similarity threshold for semantic match
 
         for (const finding of candidateFindings) {
-          // Generate embedding for finding text (title + description)
-          const findingText = `${finding.title} ${finding.description}`.substring(0, 500);
-          const findingEmbeddingResult = await embeddingService.embedText(findingText);
-          const findingEmbedding = findingEmbeddingResult?.embedding;
+          // Cache finding embeddings so we do not re-embed the same finding for each question.
+          let findingEmbedding = findingEmbeddingCache.get(finding.id);
+          if (!findingEmbedding) {
+            const findingText = `${finding.title} ${finding.description}`.substring(0, 500);
+            const findingEmbeddingResult = await embeddingService.embedText(findingText);
+            findingEmbedding = findingEmbeddingResult?.embedding;
+            if (findingEmbedding && findingEmbedding.length > 0) {
+              findingEmbeddingCache.set(finding.id, findingEmbedding);
+            }
+          }
 
           if (findingEmbedding && findingEmbedding.length > 0) {
             const similarity = cosineSimilarity(questionEmbedding, findingEmbedding);
@@ -2236,6 +2242,7 @@ export class DataScienceOrchestrator {
     // Pre-compute embeddings for all findings to improve performance
     const allFindingsCache = new Map<string, AnalysisFinding[]>();
     const allCandidateFindings: AnalysisFinding[] = [];
+  const findingEmbeddingCache = new Map<string, number[]>();
 
     // Build candidate findings from all analysis results
     // Descriptive stats
@@ -2429,6 +2436,7 @@ export class DataScienceOrchestrator {
       // 2. Pre-mapping is missing, OR
       // 3. Need to supplement findings with semantic matches
       const shouldUseSemanticMatching = !preMapping || matchedColumns.length === 0 || findings.length < 3;
+      let semanticMatchesAdded = 0;
 
       if (shouldUseSemanticMatching) {
         console.log(`🔗 [P0-6] Q${i + 1}: Using semantic matching (preMapping=${!!preMapping}, columnMatches=${matchedColumns.length}, currentFindings=${findings.length})`);
@@ -2436,7 +2444,6 @@ export class DataScienceOrchestrator {
         const semanticMatch = await findSemanticallySimilarFindings(question, allCandidateFindings);
 
         // Merge semantic matches with existing findings, avoiding duplicates
-        const existingFindingIds = new Set(findings.map(f => f.id));
         for (const semFinding of semanticMatch.findings) {
           // Avoid duplicates by checking if similar finding already exists
           const isDuplicate = findings.some(f => {
@@ -2467,6 +2474,8 @@ export class DataScienceOrchestrator {
             if (!analysisTypes.includes(semFinding.analysisType)) {
               analysisTypes.push(semFinding.analysisType);
             }
+
+            semanticMatchesAdded++;
 
             console.log(`🔗 [P0-6] Added semantic match: "${semFinding.title}" (similarity=${(semanticMatch.similarities.get(semFinding.id) || 0).toFixed(3)})`);
           }
@@ -2763,7 +2772,7 @@ export class DataScienceOrchestrator {
         const hasColumnMatch = matchedColumns.length > 0 && findings.some(f =>
           f.dataElementsUsed.some(de => matchedColumns.includes(de.toLowerCase()))
         );
-        const hasSemanticMatch = shouldUseSemanticMatching && findings.length > 0;
+        const hasSemanticMatch = semanticMatchesAdded > 0;
 
         const topFinding = findings[0];
         answer = topFinding.description;

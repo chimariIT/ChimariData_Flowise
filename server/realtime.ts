@@ -409,6 +409,14 @@ export class RealtimeServer extends EventEmitter {
     // For now, broadcast to all users. In a full implementation,
     // you'd need to maintain project member mapping
     this.broadcast(event, { projectId, excludeClient: excludeUserId });
+
+    // JO-2 FIX: Log broadcast for debugging
+    const targetCount = this.broadcast({ ...event, projectId, excludeClient: excludeUserId });
+    console.log(`📡 RealtimeServer: Broadcasting to project ${projectId} - ${targetCount} clients`, {
+      eventType: event.type,
+      sourceType: event.sourceType,
+      targetCount
+    });
   }
 
   public sendToClient(clientId: string, data: any): boolean {

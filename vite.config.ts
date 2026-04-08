@@ -120,13 +120,21 @@ export default defineConfig({
       // 1. Change target to 'http://localhost:5000'
       // 2. Set VITE_USE_PYTHON_BACKEND=false in .env.development
       // ========================================================================
-      '/api': {
-        target: 'http://localhost:8000',  // Python FastAPI Backend (Primary)
+      '/api/v1': {
+        // Routes that explicitly use /api/v1 (admin pages rewritten for Python backend)
+        target: 'http://localhost:8000',
         changeOrigin: true,
         secure: false,
+      },
+      '/api': {
+        // Legacy routes: frontend calls /api/* → Python backend at /*
+        // The Python backend includes legacy routes at root (without /api prefix)
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path: string) => path.replace(/^\/api/, ''),
         configure: (proxy, options) => {
           proxy.on('proxyReq', (proxyReq, req, res) => {
-            // Explicitly preserve all headers, especially Authorization
             if (req.headers.authorization) {
               proxyReq.setHeader('Authorization', req.headers.authorization);
             }
@@ -136,7 +144,6 @@ export default defineConfig({
             } else if (Array.isArray(forwardedAuthHeader) && forwardedAuthHeader.length > 0) {
               proxyReq.setHeader('X-Forwarded-Authorization', forwardedAuthHeader[0]);
             }
-            // Preserve other important headers
             if (req.headers['content-type']) {
               proxyReq.setHeader('Content-Type', req.headers['content-type']);
             }
@@ -146,6 +153,8 @@ export default defineConfig({
           });
         },
       },
+      // Note: /api/auth and /api/projects are handled by the general /api rule above
+      // which rewrites /api/* → /* for Python backend legacy routes
       // ========================================================================
       // WebSocket Proxy - Routes all /ws/* connections to Python backend
       // ========================================================================

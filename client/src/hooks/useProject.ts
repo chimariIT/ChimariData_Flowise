@@ -1,6 +1,13 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api";
 
+// DU-1 FIX: Individual dataset info type
+export interface IndividualDatasetInfo {
+    datasetId: string;
+    recordCount: number;
+    preview: any | null;
+}
+
 // Journey progress state type matching server-side JourneyProgressState
 // Extended to include all properties used across the frontend
 export interface JourneyProgress {
@@ -67,6 +74,24 @@ export interface JourneyProgress {
   [key: string]: any;
 }
 
+// DU-1 FIX: Helper function to get individual datasets from journeyProgress
+// This is a standalone helper, NOT a hook, so it doesn't use React hooks
+export function getIndividualDatasetsFromProgress(journeyProgress: JourneyProgress | null | undefined): IndividualDatasetInfo[] | null {
+    if (!journeyProgress) return null;
+
+    const individualDatasets = journeyProgress.individualDatasets || [];
+
+    if (!individualDatasets || individualDatasets.length === 0 || typeof individualDatasets !== 'object') return null;
+
+    // Transform individual datasets into array with metadata
+    return Object.entries(individualDatasets).map(([datasetId, dataset]: [string, any]) => ({
+        datasetId,
+        recordCount: dataset.recordCount || dataset.totalRowCount || 0,
+        preview: dataset.preview || null,
+        // Additional metadata could be added here in future (e.g., quality scores)
+    }));
+}
+
 export function useProject(projectId?: string) {
     const queryClient = useQueryClient();
 
@@ -96,7 +121,7 @@ export function useProject(projectId?: string) {
             // DEFENSE-IN-DEPTH: Merge response journeyProgress into cache instead of replacing.
             // This prevents late-arriving responses from older mutations from wiping newer keys.
             // E.g., if auto-save response arrives after requirementsDocument was saved,
-            // the merge preserves requirementsDocument while adding auto-save keys.
+            // merge preserves requirementsDocument while adding auto-save keys.
             queryClient.setQueryData(["project", projectId], (old: any) => {
                 if (!old) return old;
                 const existingProgress = old.journeyProgress || {};
@@ -107,8 +132,9 @@ export function useProject(projectId?: string) {
                     updatedAt: new Date().toISOString()
                 };
             });
-            // Invalidate to refetch authoritative state from server
-            queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+        },
+        onError: (error) => {
+            console.error('❌ Failed to update project progress:', error);
         },
     });
 

@@ -18,6 +18,7 @@ import { chimaridataAI } from '../../chimaridata-ai';
 import { sourceColumnMapper } from '../source-column-mapper';
 import { embeddingService, type EmbeddingResult } from '../embedding-service';
 import { businessDefinitionRegistry } from '../business-definition-registry';
+import { TransformationCompilerPhase2 } from '../transformation-compiler-phase2';
 
 /**
  * Required data element specification
@@ -451,6 +452,8 @@ export interface DataRequirementsMappingDocument {
             targetElements: string[];
             validationCode: string;
         }>;
+        compiledTransformations?: any[];
+        executionPlan?: any;
     };
 
     // Progress tracking
@@ -1378,6 +1381,58 @@ export class RequiredDataElementsTool {
 
         // Generate transformation plan
         document.transformationPlan = this.generateTransformationPlan(document.requiredDataElements);
+
+        // Phase 2: Compile transformations with context (non-blocking)
+        try {
+            const columnMappings = new Map<string, string>();
+            const businessContext = new Map<string, any>();
+
+            for (const element of document.requiredDataElements) {
+                if (element.sourceField) {
+                    columnMappings.set(element.elementName, element.sourceField);
+                }
+                if ((element as any).sourceColumn) {
+                    columnMappings.set(element.elementName, (element as any).sourceColumn);
+                }
+
+                const sourceColumns = (element as any).sourceColumns as Array<any> | undefined;
+                if (Array.isArray(sourceColumns)) {
+                    for (const sc of sourceColumns) {
+                        if (sc?.matched && sc?.matchedColumn && sc?.componentField) {
+                            columnMappings.set(sc.componentField, sc.matchedColumn);
+                        }
+                    }
+                }
+
+                const bizDef = (element as any).businessDefinition;
+                if (bizDef) {
+                    businessContext.set(element.elementName, bizDef);
+                }
+            }
+
+            const compiler = new TransformationCompilerPhase2();
+            const compiledTransformations = await compiler.compileElements(
+                document.requiredDataElements,
+                columnMappings,
+                dataset.rowCount,
+                {
+                    questionAnswerMapping: document.questionAnswerMapping,
+                    businessContext,
+                    projectId,
+                    industry
+                }
+            );
+
+            const executionPlan = compiler.buildExecutionPlan(compiledTransformations);
+
+            document.transformationPlan = {
+                ...document.transformationPlan,
+                compiledTransformations,
+                executionPlan
+            };
+        } catch (compileErr) {
+            console.warn('⚠️ [Phase 2] Transformation compile failed (non-blocking):', compileErr);
+        }
 
         // Update questionAnswerMapping with transformation information (Phase 1 enhancement)
         if (document.questionAnswerMapping) {

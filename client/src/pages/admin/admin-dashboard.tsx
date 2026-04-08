@@ -33,25 +33,23 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
   const { isConsultantMode, selectedCustomer, setConsultantMode, clearConsultantMode } = useConsultant();
   const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
 
-  // HIGH PRIORITY FIX: Fetch real stats from backend instead of hardcoded values
-  const { data: dashboardData, isLoading: statsLoading, error: statsError, refetch: refetchStats } = useQuery({
-    queryKey: ['/api/admin/dashboard'],
+  // Fetch admin stats from Python backend via Vite proxy
+  const { data: overview, isLoading: overviewLoading, error: overviewError, refetch: refetchOverview } = useQuery({
+    queryKey: ['/api/v1/admin/overview'],
     queryFn: async () => {
-      const response = await apiClient.get('/api/admin/dashboard');
+      const response = await apiClient.get('/api/v1/admin/overview');
       return response?.data || response;
     },
-    refetchInterval: 30000, // Auto-refresh every 30 seconds
-    staleTime: 10000 // Consider data stale after 10 seconds
+    refetchInterval: 30000,
+    staleTime: 10000,
   });
-
-  // Fetch dynamic tier pricing from API
-  const { data: tierData } = useQuery({
-    queryKey: ['/api/admin/billing/tiers'],
+  const { data: health, isLoading: healthLoading } = useQuery({
+    queryKey: ['/api/v1/admin/health'],
     queryFn: async () => {
-      const response = await apiClient.get('/api/admin/billing/tiers');
-      return response?.tiers || response?.data?.tiers || [];
+      const response = await apiClient.get('/api/v1/admin/health');
+      return response?.data || response;
     },
-    staleTime: 60000
+    staleTime: 30000,
   });
 
   const adminSections = [
@@ -99,31 +97,43 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
     }
   ];
 
-  // Build stats from real API data
+  // Build stats from Python backend API data
   const stats = [
     {
       title: "Total Users",
-      value: statsLoading ? "..." : (dashboardData?.totalUsers?.toLocaleString() || "0"),
+      value: overviewLoading ? "..." : (overview?.users?.total?.toLocaleString() || "0"),
       icon: Users,
       color: "text-blue-600"
     },
     {
       title: "Total Projects",
-      value: statsLoading ? "..." : (dashboardData?.totalProjects?.toLocaleString() || "0"),
+      value: overviewLoading ? "..." : (overview?.projects?.total?.toLocaleString() || "0"),
       icon: TrendingUp,
       color: "text-green-600"
     },
     {
-      title: "Active Agents",
-      value: statsLoading ? "..." : `${dashboardData?.activeAgents || 0}/${dashboardData?.totalAgents || 0}`,
-      icon: Bot,
+      title: "Total Roles",
+      value: overviewLoading ? "..." : (overview?.rbac?.total_roles?.toLocaleString() || "0"),
+      icon: UserCog,
+      color: "text-indigo-600"
+    },
+    {
+      title: "Total Permissions",
+      value: overviewLoading ? "..." : (overview?.rbac?.total_permissions?.toLocaleString() || "0"),
+      icon: Shield,
       color: "text-purple-600"
     },
     {
+      title: "Active Tiers",
+      value: overviewLoading ? "..." : (overview?.billing?.active_tiers?.toLocaleString() || "0"),
+      icon: DollarSign,
+      color: "text-green-600"
+    },
+    {
       title: "System Status",
-      value: statsLoading ? "..." : (dashboardData?.systemStatus === 'healthy' ? "Operational" : dashboardData?.systemStatus || "Unknown"),
+      value: healthLoading ? "..." : (health?.services?.admin_service === "up" ? "Operational" : "Unknown"),
       icon: Activity,
-      color: dashboardData?.systemStatus === 'healthy' ? "text-emerald-600" : dashboardData?.systemStatus === 'degraded' ? "text-amber-600" : "text-red-600"
+      color: health?.services?.admin_service === "up" ? "text-emerald-600" : "text-red-600"
     }
   ];
 
@@ -163,10 +173,10 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => refetchStats()}
-              disabled={statsLoading}
+              onClick={() => refetchOverview()}
+              disabled={overviewLoading}
             >
-              {statsLoading ? (
+              {overviewLoading ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
                 <RefreshCw className="h-4 w-4" />
@@ -174,9 +184,9 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
               <span className="ml-2">Refresh</span>
             </Button>
           </div>
-          {statsError && (
+          {overviewError && (
             <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
-              Failed to load dashboard stats. Please try refreshing.
+              Failed to load system overview. Please try refreshing.
             </div>
           )}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">

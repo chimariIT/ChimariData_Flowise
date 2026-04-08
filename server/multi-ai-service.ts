@@ -15,6 +15,30 @@ class MultiAIService {
     this.initializeProviders();
   }
 
+  private createOpenAICompatibleProvider(args: {
+    name: string;
+    apiKey: string;
+    baseURL: string;
+    model: string;
+    fallbackMessage: string;
+  }): AIProvider {
+    const client = new OpenAI({ apiKey: args.apiKey, baseURL: args.baseURL });
+
+    return {
+      name: args.name,
+      isAvailable: () => !!args.apiKey,
+      analyze: async (question: string, dataContext: any) => {
+        const prompt = this.buildAnalysisPrompt(question, dataContext);
+        const response = await client.chat.completions.create({
+          model: args.model,
+          messages: [{ role: 'user', content: prompt }],
+          max_tokens: 2000,
+        });
+        return response.choices?.[0]?.message?.content || args.fallbackMessage;
+      }
+    };
+  }
+
   private initializeProviders() {
     // 1. Gemini Provider (Primary) - ChimariData Default
     const googleApiKey = process.env.GOOGLE_AI_API_KEY || process.env.GEMINI_API_KEY;
@@ -54,6 +78,19 @@ class MultiAIService {
       });
     }
 
+    // 2.5 OpenRouter Provider (OpenAI-compatible hedge for OpenAI/Gemini outages)
+    if (process.env.OPENROUTER_API_KEY) {
+      this.providers.push(
+        this.createOpenAICompatibleProvider({
+          name: 'OpenRouter',
+          apiKey: process.env.OPENROUTER_API_KEY,
+          baseURL: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
+          model: process.env.OPENROUTER_LLM_MODEL || 'openai/gpt-4o-mini',
+          fallbackMessage: 'Unable to analyze with OpenRouter',
+        })
+      );
+    }
+
     // 3. Anthropic Provider (Third fallback)  
     if (process.env.ANTHROPIC_API_KEY) {
       const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -71,6 +108,19 @@ class MultiAIService {
           return response.content[0].type === 'text' ? response.content[0].text : "Unable to analyze with Anthropic";
         }
       });
+    }
+
+    // 4. Groq Provider (cost-friendly fast fallback)
+    if (process.env.GROQ_API_KEY) {
+      this.providers.push(
+        this.createOpenAICompatibleProvider({
+          name: 'Groq',
+          apiKey: process.env.GROQ_API_KEY,
+          baseURL: process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1',
+          model: process.env.GROQ_LLM_MODEL || 'llama-3.1-70b-versatile',
+          fallbackMessage: 'Unable to analyze with Groq',
+        })
+      );
     }
 
     console.log(`Initialized AI providers: ${this.providers.map(p => p.name).join(', ')}`);
@@ -127,11 +177,11 @@ Format your response clearly with headers and bullet points for readability.`;
     return this.providers.filter(p => p.isAvailable()).length;
   }
 
-  // Main analysis method with try-catch fallback: Gemini → OpenAI → Anthropic
+  // Main analysis method with try-catch fallback: Gemini -> OpenAI -> OpenRouter -> Anthropic -> Groq
   async analyzeWithFallback(question: string, dataContext: any): Promise<{ result: string; provider: string }> {
     // Quick health check before analysis
     if (this.getAvailableProviderCount() === 0) {
-      throw new Error('No AI providers available. Please configure at least one API key (GOOGLE_AI_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY).');
+      throw new Error('No AI providers available. Configure at least one API key (GOOGLE_AI_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY, ANTHROPIC_API_KEY, or GROQ_API_KEY).');
     }
 
     const errors: string[] = [];
@@ -163,7 +213,13 @@ Format your response clearly with headers and bullet points for readability.`;
   async analyzeWithCustomKeys(
     question: string, 
     dataContext: any,
-    customKeys: { geminiApiKey?: string; anthropicApiKey?: string; openaiApiKey?: string }
+    customKeys: {
+      geminiApiKey?: string;
+      anthropicApiKey?: string;
+      openaiApiKey?: string;
+      openrouterApiKey?: string;
+      groqApiKey?: string;
+    }
   ): Promise<{ result: string; provider: string }> {
     const errors: string[] = [];
 
@@ -217,6 +273,48 @@ Format your response clearly with headers and bullet points for readability.`;
       } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         errors.push(`Custom Anthropic: ${errorMessage}`);
+      }
+    }
+
+    // Try OpenRouter with custom key
+    if (customKeys.openrouterApiKey) {
+      try {
+        const openrouter = new OpenAI({
+          apiKey: customKeys.openrouterApiKey,
+          baseURL: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
+        });
+        const prompt = this.buildAnalysisPrompt(question, dataContext);
+        const response = await openrouter.chat.completions.create({
+          model: process.env.OPENROUTER_LLM_MODEL || 'openai/gpt-4o-mini',
+          messages: [{ role: 'user', content: prompt }],
+          max_tokens: 2000,
+        });
+        const result = response.choices[0].message.content || 'Unable to analyze with custom OpenRouter';
+        return { result, provider: 'OpenRouter (Custom)' };
+      } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        errors.push(`Custom OpenRouter: ${errorMessage}`);
+      }
+    }
+
+    // Try Groq with custom key
+    if (customKeys.groqApiKey) {
+      try {
+        const groq = new OpenAI({
+          apiKey: customKeys.groqApiKey,
+          baseURL: process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1',
+        });
+        const prompt = this.buildAnalysisPrompt(question, dataContext);
+        const response = await groq.chat.completions.create({
+          model: process.env.GROQ_LLM_MODEL || 'llama-3.1-70b-versatile',
+          messages: [{ role: 'user', content: prompt }],
+          max_tokens: 2000,
+        });
+        const result = response.choices[0].message.content || 'Unable to analyze with custom Groq';
+        return { result, provider: 'Groq (Custom)' };
+      } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        errors.push(`Custom Groq: ${errorMessage}`);
       }
     }
 

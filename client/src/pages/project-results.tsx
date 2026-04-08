@@ -7,7 +7,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api";
-import { ArrowLeft, Download, Share, Database, Lightbulb, BarChart3, PieChart, Calendar, CheckCircle, Settings, CreditCard, Zap, Brain, MessageSquare, Eye, FileSpreadsheet, FileText, ChevronDown, XCircle, AlertCircle, Loader2, Filter, Lock } from "lucide-react";
+import { ArrowLeft, Download, Share, Database, Lightbulb, BarChart3, PieChart, Calendar, CheckCircle, Settings, CreditCard, Zap, Brain, MessageSquare, Eye, FileSpreadsheet, FileText, ChevronDown, XCircle, AlertCircle, Loader2, Filter, Lock, GitCompare } from "lucide-react";
+import { ScenarioExplorer } from "@/components/ScenarioExplorer";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart as RechartsPieChart, Cell, Pie } from "recharts";
 import { AIChatLazy, AIInsightsPanelLazy } from "@/components/LazyComponents";
 // ✅ FIX 3.3: Import PaymentStatusBanner for visual payment status indicators
@@ -650,10 +651,14 @@ export default function ProjectResults({
 
           return (
         <Tabs value={activeResultsTab} onValueChange={handleTabChange} className="space-y-6">
-          <TabsList className="grid w-full grid-cols-4">
+          <TabsList className="grid w-full grid-cols-5">
             <TabsTrigger value="insights" className="flex items-center gap-2">
               <Brain className="w-4 h-4" />
               AI Insights ({selectedAnalysis === 'all' ? insightList.length : filteredInsights.length})
+            </TabsTrigger>
+            <TabsTrigger value="scenarios" className="flex items-center gap-2">
+              <GitCompare className="w-4 h-4" />
+              Scenarios
             </TabsTrigger>
             <TabsTrigger value="chat" className={`flex items-center gap-2 ${lockedTabs.has('chat') ? 'opacity-60' : ''}`}>
               {lockedTabs.has('chat') ? <Lock className="w-4 h-4 text-slate-400" /> : <MessageSquare className="w-4 h-4" />}
@@ -740,6 +745,19 @@ export default function ProjectResults({
                 }}
               />
             )}
+          </TabsContent>
+
+          {/* Scenario Explorer Tab */}
+          <TabsContent value="scenarios">
+            <ScenarioExplorer
+              projectId={projectId}
+              analysisTypes={
+                Array.isArray(analysisResults)
+                  ? [...new Set(analysisResults.map((r: any) => r.analysis_type || r.analysisType).filter(Boolean))]
+                  : []
+              }
+              originalResults={analysisResults}
+            />
           </TabsContent>
 
           {/* AI Chat Tab */}

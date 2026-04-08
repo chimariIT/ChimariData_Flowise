@@ -50,7 +50,7 @@ export class WebSocketManager extends SimpleEventEmitter {
         this.emit('status', this.status);
 
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const host = import.meta.env.DEV ? 'localhost:5000' : window.location.host;
+        const host = import.meta.env.DEV ? 'localhost:5173' : window.location.host;
         const token = localStorage.getItem('auth_token');
 
         const url = `${protocol}//${host}/ws?token=${token || ''}`;

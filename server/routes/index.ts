@@ -2,7 +2,8 @@ import { Router } from 'express';
 import crypto from 'crypto';
 import { nanoid } from 'nanoid';
 import authRouter from './auth';
-import projectRouter, { createVisualizationHandler } from './project';
+import projectDomainRouter from '../domains/project/router';
+// import projectRouter, { createVisualizationHandler } from './project';
 import dataRouter from './data';
 import datasetsRouter from './datasets';
 import aiRouter from './ai';
@@ -69,14 +70,8 @@ const router = Router();
 router.use('/auth', authRouter);
 router.use('/system', systemRouter); // System health and monitoring endpoints
 router.use('/projects', ensureAuthenticated, analysisPlansRouter); // Analysis Plan Step routes - REQUIRES AUTH
-router.post(
-  '/create-visualization/:projectId',
-  ensureAuthenticated,
-  requireOwnership('project'),
-  createVisualizationHandler
-);
-router.use('/projects', dataVerificationRouter, projectRouter); // Data verification routes first (no dataset requirement), then project routes
-router.use('/', dataTransformationRouter); // Transformation endpoints (e.g., /transform-data/:projectId)
+// OLD: Visualization route replaced by ARCH-1 domain router (now in visualizations-handler.ts)
+router.use('/projects', dataVerificationRouter, projectDomainRouter); // NEW: Using ARCH-1 domain router
 router.use('/data-workflow', dataWorkflowRouter); // Resilient data workflow with interactive clarifications
 router.use('/data', ensureAuthenticated, dataRouter);
 router.use('/datasets', ensureAuthenticated, datasetsRouter);

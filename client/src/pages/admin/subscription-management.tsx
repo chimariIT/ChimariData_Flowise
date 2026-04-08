@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { apiClient } from '@/lib/api';
 import { useToast } from '@/hooks/use-toast';
+import { useQuery } from '@tanstack/react-query';
 import {
   Activity,
   AlertTriangle,
@@ -346,10 +347,285 @@ const AnalyticsDashboard: React.FC = () => {
   );
 };
 
+// ============================================================================
+// PYTHON BACKEND BILLING SECTION (New Feature)
+// ============================================================================
+
+function PythonBillingSection() {
+  const { toast } = useToast();
+  const [activeSubTab, setActiveSubTab] = useState<'tiers' | 'invoices' | 'campaigns'>('tiers');
+
+  // Fetch billing data from Python backend via Vite proxy
+  const { data: pythonTiers, isLoading: tiersLoading, error: tiersError, refetch: refetchTiers } = useQuery({
+    queryKey: ['/api/v1/billing/tiers'],
+    queryFn: async () => {
+      const response = await apiClient.get('/api/v1/billing/tiers');
+      return response?.data?.tiers || response?.tiers || [];
+    },
+  });
+  const { data: invoices, isLoading: invoicesLoading, error: invoicesError, refetch: refetchInvoices } = useQuery({
+    queryKey: ['/api/v1/billing/invoices'],
+    queryFn: async () => {
+      const response = await apiClient.get('/api/v1/billing/invoices?limit=20');
+      return response?.data?.invoices || response?.invoices || [];
+    },
+  });
+  const { data: campaigns, isLoading: campaignsLoading, error: campaignsError, refetch: refetchCampaigns } = useQuery({
+    queryKey: ['/api/v1/billing/campaigns'],
+    queryFn: async () => {
+      const response = await apiClient.get('/api/v1/billing/campaigns');
+      return response?.data?.campaigns || response?.campaigns || [];
+    },
+  });
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+        <div className="flex items-center gap-2">
+          <Zap className="h-5 w-5 text-blue-600" />
+          <div>
+            <h3 className="text-lg font-semibold text-blue-900">Python Backend Billing</h3>
+            <p className="text-sm text-blue-700">
+              Managing subscription tiers, invoices, and promotional campaigns via Python backend (port 8000)
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Sub-tabs */}
+      <div className="flex gap-2 border-b">
+        <button
+          onClick={() => setActiveSubTab('tiers')}
+          className={`px-4 py-2 font-medium text-sm ${
+            activeSubTab === 'tiers'
+              ? 'border-b-2 border-blue-500 text-blue-600'
+              : 'text-gray-600 hover:text-gray-900'
+          }`}
+        >
+          Subscription Tiers
+        </button>
+        <button
+          onClick={() => setActiveSubTab('invoices')}
+          className={`px-4 py-2 font-medium text-sm ${
+            activeSubTab === 'invoices'
+              ? 'border-b-2 border-blue-500 text-blue-600'
+              : 'text-gray-600 hover:text-gray-900'
+          }`}
+        >
+          Invoices
+        </button>
+        <button
+          onClick={() => setActiveSubTab('campaigns')}
+          className={`px-4 py-2 font-medium text-sm ${
+            activeSubTab === 'campaigns'
+              ? 'border-b-2 border-blue-500 text-blue-600'
+              : 'text-gray-600 hover:text-gray-900'
+          }`}
+        >
+          Campaigns
+        </button>
+      </div>
+
+      {/* Subscription Tiers Tab */}
+      {activeSubTab === 'tiers' && (
+        <div className="space-y-4">
+          {tiersLoading ? (
+            <div className="flex items-center gap-2 p-4">
+              <Loader className="h-5 w-5 animate-spin text-blue-600" />
+              <span>Loading tiers from Python backend...</span>
+            </div>
+          ) : tiersError ? (
+            <div className="text-destructive bg-destructive/10 p-4 rounded">
+              Error loading tiers: {(tiersError as Error).message}
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {pythonTiers.length === 0 ? (
+                <div className="text-center py-8 text-gray-500">
+                  No subscription tiers found in Python backend
+                </div>
+              ) : (
+                pythonTiers.map((tier: any) => (
+                  <div key={tier.id} className="bg-white rounded-lg shadow p-6">
+                    <div className="flex justify-between items-start mb-4">
+                      <div>
+                        <h4 className="text-lg font-semibold text-gray-900">{tier.display_name || tier.name}</h4>
+                        <p className="text-2xl font-bold text-blue-600">${(tier.monthly_price_usd || 0).toFixed(2)}/month</p>
+                      </div>
+                      <button
+                        onClick={() => refetchTiers()}
+                        className="p-2 text-gray-400 hover:text-gray-600"
+                        title="Refresh tiers"
+                      >
+                        <RefreshCw className="h-4 w-4" />
+                      </button>
+                    </div>
+                    {tier.features && tier.features.length > 0 && (
+                      <div>
+                        <h5 className="text-sm font-medium text-gray-700 mb-2">Features:</h5>
+                        <ul className="space-y-1">
+                          {tier.features.map((feature: string, idx: number) => (
+                            <li key={idx} className="text-sm text-gray-600 flex items-center gap-2">
+                              <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
+                              {feature}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {tier.analysis_limit && (
+                      <div className="mt-2 text-sm text-gray-600">
+                        <strong>Analysis Limit:</strong> {tier.analysis_limit} per month
+                      </div>
+                    )}
+                    {tier.projects_limit && (
+                      <div className="mt-2 text-sm text-gray-600">
+                        <strong>Projects Limit:</strong> {tier.projects_limit}
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Invoices Tab */}
+      {activeSubTab === 'invoices' && (
+        <div className="space-y-4">
+          {invoicesLoading ? (
+            <div className="flex items-center gap-2 p-4">
+              <Loader className="h-5 w-5 animate-spin text-blue-600" />
+              <span>Loading invoices from Python backend...</span>
+            </div>
+          ) : invoicesError ? (
+            <div className="text-destructive bg-destructive/10 p-4 rounded">
+              Error loading invoices: {(invoicesError as Error).message}
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {invoices.length === 0 ? (
+                <div className="text-center py-8 text-gray-500">
+                  No invoices found in Python backend
+                </div>
+              ) : (
+                <div className="bg-white rounded-lg shadow overflow-hidden">
+                  <table className="w-full">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Invoice ID</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">User ID</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Amount</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Due Date</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200">
+                      {invoices.map((invoice: any) => (
+                        <tr key={invoice.id} className="hover:bg-gray-50">
+                          <td className="px-6 py-4 text-sm text-gray-900">{invoice.id}</td>
+                          <td className="px-6 py-4 text-sm text-gray-600">{invoice.user_id}</td>
+                          <td className="px-6 py-4 text-sm font-medium text-gray-900">
+                            ${invoice.amount_usd?.toFixed(2) || '0.00'}
+                          </td>
+                          <td className="px-6 py-4">
+                            <span className={`px-2 py-1 rounded text-xs font-medium ${
+                              invoice.status === 'paid'
+                                ? 'bg-green-100 text-green-800'
+                                : invoice.status === 'pending'
+                                  ? 'bg-yellow-100 text-yellow-800'
+                                  : invoice.status === 'failed'
+                                    ? 'bg-red-100 text-red-800'
+                                    : 'bg-gray-100 text-gray-800'
+                            }`}>
+                              {invoice.status || 'unknown'}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-sm text-gray-600">
+                            {invoice.due_date ? new Date(invoice.due_date).toLocaleDateString() : '-'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Campaigns Tab */}
+      {activeSubTab === 'campaigns' && (
+        <div className="space-y-4">
+          {campaignsLoading ? (
+            <div className="flex items-center gap-2 p-4">
+              <Loader className="h-5 w-5 animate-spin text-blue-600" />
+              <span>Loading campaigns from Python backend...</span>
+            </div>
+          ) : campaignsError ? (
+            <div className="text-destructive bg-destructive/10 p-4 rounded">
+              Error loading campaigns: {(campaignsError as Error).message}
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {campaigns.length === 0 ? (
+                <div className="text-center py-8 text-gray-500">
+                  No campaigns found in Python backend
+                </div>
+              ) : (
+                campaigns.map((campaign: any) => (
+                  <div key={campaign.id} className="bg-white rounded-lg shadow p-6">
+                    <div className="flex justify-between items-start mb-4">
+                      <div>
+                        <h4 className="text-lg font-semibold text-gray-900">{campaign.name}</h4>
+                        <p className="text-sm text-gray-600">Code: <strong className="text-blue-600">{campaign.code}</strong></p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {campaign.active && (
+                          <span className="px-2 py-1 bg-green-100 text-green-800 rounded text-xs font-medium">Active</span>
+                        )}
+                        <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs font-medium">
+                          {campaign.discount_percentage}% off
+                        </span>
+                      </div>
+                    </div>
+                    <p className="text-sm text-gray-600 mb-4">{campaign.description}</p>
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div>
+                        <strong className="text-gray-700">Start Date:</strong>
+                        <span className="text-gray-600 ml-2">
+                          {campaign.start_date ? new Date(campaign.start_date).toLocaleDateString() : '-'}
+                        </span>
+                      </div>
+                      <div>
+                        <strong className="text-gray-700">End Date:</strong>
+                        <span className="text-gray-600 ml-2">
+                          {campaign.end_date ? new Date(campaign.end_date).toLocaleDateString() : '-'}
+                        </span>
+                      </div>
+                    </div>
+                    {campaign.max_uses && (
+                      <div className="mt-2 text-sm text-gray-600">
+                        <strong>Max Uses:</strong> {campaign.max_uses}
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const SubscriptionManagement: React.FC = () => {
   // LOW PRIORITY FIX: Add toast hook for proper notifications
   const { toast } = useToast();
-  const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'tiers' | 'alerts' | 'analytics' | 'settings'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'tiers' | 'alerts' | 'analytics' | 'python-billing' | 'settings'>('overview');
   const [loading, setLoading] = useState(true);
   const [userMetrics, setUserMetrics] = useState<UsageMetrics[]>([]);
   const [subscriptionTiers, setSubscriptionTiers] = useState<SubscriptionTier[]>([]);
@@ -886,6 +1162,7 @@ const SubscriptionManagement: React.FC = () => {
               { id: 'tiers', label: 'Subscription Tiers', icon: CreditCard },
               { id: 'alerts', label: 'Quota Alerts', icon: AlertTriangle },
               { id: 'analytics', label: 'Analytics', icon: TrendingUp },
+              { id: 'python-billing', label: 'Python Billing', icon: Zap },
               { id: 'settings', label: 'Settings', icon: Settings }
             ].map(tab => {
               const Icon = tab.icon;
@@ -1597,6 +1874,10 @@ const SubscriptionManagement: React.FC = () => {
 
         {activeTab === 'analytics' && (
           <AnalyticsDashboard />
+        )}
+
+        {activeTab === 'python-billing' && (
+          <PythonBillingSection />
         )}
 
         {activeTab === 'settings' && (

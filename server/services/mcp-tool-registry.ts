@@ -9,6 +9,9 @@ import { sparkVisualizationHandler, sparkStatisticalHandler } from './spark-serv
 import type { ToolExecutionContext, ToolExecutionResult } from './agent-tool-handlers';
 import { artifactService } from './artifact-persistence-service';
 
+// JO-4 FIX: Import Zod for input validation
+import { z } from 'zod';
+
 export type { ToolExecutionContext, ToolExecutionResult } from './agent-tool-handlers';
 
 /**
@@ -2886,6 +2889,50 @@ function createPlaceholderResult(executionContext: ToolExecutionContext, toolNam
 /**
  * Execute a tool with automatic validation and analytics tracking
  */
+/**
+ * JO-4 FIX: Validate tool input against registered schema
+ */
+function validateToolInput(
+  toolName: string,
+  tool: ToolDefinition,
+  input: any
+): { valid: boolean; error?: string } {
+  if (!tool.inputSchema) {
+    console.log(`⚠️ Tool ${toolName} has no inputSchema defined - skipping validation`);
+    return { valid: true }; // Allow if no schema defined
+  }
+
+  try {
+    // If inputSchema is a Zod schema, use it directly
+    if (tool.inputSchema && typeof tool.inputSchema.parse === 'function') {
+      tool.inputSchema.parse(input);
+      console.log(`✅ Input validation passed for tool ${toolName}`);
+      return { valid: true };
+    }
+    // If inputSchema is a plain object, do basic structure validation
+    if (typeof tool.inputSchema === 'object') {
+      for (const [key, schema] of Object.entries(tool.inputSchema)) {
+        if (schema?.required && !(key in input)) {
+          return {
+            valid: false,
+            error: `Missing required field: ${key} for tool ${toolName}`
+          };
+        }
+      }
+      console.log(`✅ Input validation passed for tool ${toolName} (object schema)`);
+      return { valid: true };
+    }
+    // Schema type not recognized, allow through
+    console.log(`⚠️ Unknown inputSchema type for tool ${toolName} - skipping validation`);
+    return { valid: true };
+  } catch (error: any) {
+    return {
+      valid: false,
+      error: `Input validation failed for tool ${toolName}: ${error.message || error}`
+    };
+  }
+}
+
 export async function executeTool(
   toolName: string,
   agentId: string,
@@ -2901,6 +2948,25 @@ export async function executeTool(
   const tool = MCPToolRegistry.getTool(toolName);
   if (!tool) {
     throw new Error(`Tool ${toolName} not found`);
+  }
+
+  // JO-4 FIX: Validate input against schema
+  const validation = validateToolInput(toolName, tool, input);
+  if (!validation.valid) {
+    console.error(`🚨 Tool input validation failed for ${toolName}: ${validation.error}`);
+    // Return error result instead of throwing to allow graceful handling
+    return {
+      executionId: context?.executionId || 'unknown',
+      toolId: toolName,
+      status: 'error',
+      result: null,
+      metrics: {
+        duration: 0,
+        resourcesUsed: { cpu: 0, memory: 0, storage: 0 },
+        cost: 0
+      },
+      error: validation.error
+    };
   }
 
   console.log(`🔧 Executing tool: ${toolName} for agent: ${agentId}`);

@@ -89,7 +89,7 @@ export class RealtimeClient {
         typeof process !== 'undefined'
           ? (process.env?.VITE_REALTIME_URL || process.env?.REALTIME_URL)
           : undefined;
-      return override || 'ws://localhost:5000/ws';
+      return override || 'ws://localhost:8000/ws';
     }
 
     // Use same-origin so Vite's proxy forwards to the API server during development

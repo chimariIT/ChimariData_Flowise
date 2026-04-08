@@ -12,11 +12,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
+import { DatabaseConnectorTab } from "@/components/DatabaseConnectorTab";
+import { APIConnectorTab } from "@/components/APIConnectorTab";
 import {
   Database,
   Upload,
@@ -957,7 +960,22 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
       return;
     }
 
-    setUploadedFiles((prev) => [...prev, ...files]);
+    // Validate file sizes (100 MB limit)
+    const MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024;
+    const oversizedFiles = files.filter(f => f.size > MAX_FILE_SIZE_BYTES);
+    if (oversizedFiles.length > 0) {
+      toast({
+        title: "File Too Large",
+        description: `${oversizedFiles.map(f => `${f.name} (${(f.size / 1024 / 1024).toFixed(1)} MB)`).join(', ')} exceed${oversizedFiles.length === 1 ? 's' : ''} the 100 MB limit.`,
+        variant: "destructive"
+      });
+      const validFiles = files.filter(f => f.size <= MAX_FILE_SIZE_BYTES);
+      if (validFiles.length === 0) return;
+      // Continue with only valid files
+      setUploadedFiles((prev) => [...prev, ...validFiles]);
+    } else {
+      setUploadedFiles((prev) => [...prev, ...files]);
+    }
     setUploadStatus('uploading');
     setUploadProgress(5);
     setDataQualityApproved(false);
@@ -1430,18 +1448,25 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
         </Card>
       )}
 
-      {/* File Upload Area */}
+      {/* Data Source Selection */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Upload className="w-5 h-5" />
-            Upload Your Data
+            Connect Your Data
           </CardTitle>
           <CardDescription>
-            Upload your data file for analysis. Supported formats: CSV, Excel, JSON
+            Upload files or connect to a database or API
           </CardDescription>
         </CardHeader>
         <CardContent>
+        <Tabs defaultValue="file-upload" className="w-full">
+          <TabsList className="grid w-full grid-cols-3">
+            <TabsTrigger value="file-upload">File Upload</TabsTrigger>
+            <TabsTrigger value="database">Database</TabsTrigger>
+            <TabsTrigger value="api">API</TabsTrigger>
+          </TabsList>
+          <TabsContent value="file-upload">
           <div className="space-y-4">
             <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-gray-400 transition-colors">
               <input
@@ -1466,6 +1491,9 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
                     <p className="text-sm text-gray-500">
                       {getUploadStatusText()}
                     </p>
+                    <p className="text-xs text-gray-400 mt-1">
+                      Max file size: 100 MB. Supported: CSV, Excel, JSON
+                    </p>
                   </div>
                   {!uploadedFiles.length && (
                     <Button variant="outline" disabled={uploadStatus === 'uploading' || uploadStatus === 'processing'}>
@@ -1486,6 +1514,40 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
               </div>
             )}
           </div>
+          </TabsContent>
+          <TabsContent value="database">
+            <div className="py-4">
+              <DatabaseConnectorTab
+                projectId={latestProjectId || ''}
+                onDataIngested={(result: any) => {
+                  if (result?.success) {
+                    setUploadStatus('completed');
+                    toast({
+                      title: "Data Imported",
+                      description: `Successfully imported ${result.recordCount || 0} records from database.`,
+                    });
+                  }
+                }}
+              />
+            </div>
+          </TabsContent>
+          <TabsContent value="api">
+            <div className="py-4">
+              <APIConnectorTab
+                projectId={latestProjectId || ''}
+                onDataIngested={(result: any) => {
+                  if (result?.success) {
+                    setUploadStatus('completed');
+                    toast({
+                      title: "Data Imported",
+                      description: `Successfully imported ${result.recordCount || 0} records from API.`,
+                    });
+                  }
+                }}
+              />
+            </div>
+          </TabsContent>
+        </Tabs>
         </CardContent>
       </Card>
 

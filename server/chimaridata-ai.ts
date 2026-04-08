@@ -28,17 +28,27 @@ export class ChimaridataAI {
       this.providers.push(new OpenAIProvider(process.env.OPENAI_API_KEY));
     }
 
-    // Anthropic provider (fallback 2)
+    // OpenRouter provider (fallback 2 - OpenAI-compatible aggregator)
+    if (process.env.OPENROUTER_API_KEY) {
+      this.providers.push(new OpenRouterProvider(process.env.OPENROUTER_API_KEY));
+    }
+
+    // Anthropic provider (fallback 3)
     if (process.env.ANTHROPIC_API_KEY) {
       this.providers.push(new AnthropicProvider(process.env.ANTHROPIC_API_KEY));
     }
 
-    // Groq provider (fallback 3 - fast Llama/Mixtral inference)
+    // Together provider (fallback 4 - open-source model gateway)
+    if (process.env.TOGETHER_API_KEY) {
+      this.providers.push(new TogetherProvider(process.env.TOGETHER_API_KEY));
+    }
+
+    // Groq provider (fallback 5 - fast Llama/Mixtral inference)
     if (process.env.GROQ_API_KEY) {
       this.providers.push(new GroqProvider(process.env.GROQ_API_KEY));
     }
 
-    // Mock provider (fallback 4 - always available if others fail)
+    // Mock provider (final fallback - always available if others fail)
     if (this.providers.length === 0) {
       this.providers.push(new MockProvider());
     }
@@ -279,6 +289,78 @@ class AnthropicProvider implements AIProvider {
   }
 }
 
+class OpenRouterProvider implements AIProvider {
+  public name = 'OpenRouter';
+  private client: OpenAI;
+
+  constructor(private apiKey: string) {
+    this.client = new OpenAI({
+      apiKey,
+      baseURL: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
+    });
+  }
+
+  async generateInsights(data: any, prompt: string): Promise<string> {
+    const response = await this.client.chat.completions.create({
+      model: process.env.OPENROUTER_LLM_MODEL || 'openai/gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: 'You are an expert data analyst. Provide clear, actionable insights based on the data provided.'
+        },
+        {
+          role: 'user',
+          content: prompt
+        }
+      ],
+      max_tokens: 2000,
+      temperature: 0.7,
+    });
+
+    return response.choices[0].message.content || 'No insights generated';
+  }
+
+  isAvailable(): boolean {
+    return !!this.apiKey;
+  }
+}
+
+class TogetherProvider implements AIProvider {
+  public name = 'Together';
+  private client: OpenAI;
+
+  constructor(private apiKey: string) {
+    this.client = new OpenAI({
+      apiKey,
+      baseURL: process.env.TOGETHER_BASE_URL || 'https://api.together.xyz/v1',
+    });
+  }
+
+  async generateInsights(data: any, prompt: string): Promise<string> {
+    const response = await this.client.chat.completions.create({
+      model: process.env.TOGETHER_LLM_MODEL || 'meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo',
+      messages: [
+        {
+          role: 'system',
+          content: 'You are an expert data analyst. Provide clear, actionable insights based on the data provided.'
+        },
+        {
+          role: 'user',
+          content: prompt
+        }
+      ],
+      max_tokens: 2000,
+      temperature: 0.7,
+    });
+
+    return response.choices[0].message.content || 'No insights generated';
+  }
+
+  isAvailable(): boolean {
+    return !!this.apiKey;
+  }
+}
+
 class GroqProvider implements AIProvider {
   public name = "Groq";
   private apiKey: string;
@@ -336,7 +418,7 @@ class MockProvider implements AIProvider {
         { title: "Configuration Required", description: "No AI provider API keys found in environment variables.", type: "warning", confidence: 1.0 },
         { title: "Data Overview", description: `Dataset contains ${data.recordCount || 'unknown'} records.`, type: "info", confidence: 1.0 }
       ],
-      recommendations: ["Add GOOGLE_AI_API_KEY or OPENAI_API_KEY to .env file"],
+      recommendations: ["Add one of GOOGLE_AI_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY, TOGETHER_API_KEY, or GROQ_API_KEY to .env file"],
       nextSteps: ["Configure API keys", "Restart server"],
       warnings: ["AI features are currently disabled"]
     });

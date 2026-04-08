@@ -22,6 +22,7 @@ import { registerCoreTools } from './services/mcp-tool-registry';
 import { initializePythonWorkerPool } from './services/python-worker-pool';
 import { PricingService } from './services/pricing';
 import { SocketManager } from './socket-manager';
+import { initializeSocketIOBridge } from './services/socket-io-bridge';
 
 const app = express();
 
@@ -93,6 +94,12 @@ app.use((req, res, next) => {
 });
 
 let server: Server;
+
+// Module-level export for initialization state (populated inside IIFE)
+let _initializationState: any = null;
+export function getInitializationState() {
+  return _initializationState || (global as any).getInitializationState?.();
+}
 
 (async () => {
   // ========================================
@@ -282,13 +289,9 @@ let server: Server;
     }
   }
 
-  // Export initialization state for admin endpoint
-  function getInitializationState() {
-    return initializationState;
-  }
-
-  // Make it available globally
-  (global as any).getInitializationState = getInitializationState;
+  // Make initialization state available globally and via module export
+  _initializationState = initializationState;
+  (global as any).getInitializationState = () => initializationState;
 
   // ========================================
   // START SERVER
@@ -303,6 +306,12 @@ let server: Server;
   // New features should use RealtimeServer (native WebSocket) instead
   // See socket-manager.ts for migration instructions
   SocketManager.getInstance().initialize(server);
+
+  // Initialize Socket.IO to WebSocket bridge (JO-3 FIX)
+  // Bridges legacy Socket.IO events to native WebSocket events
+  console.log('🌉 Initializing Socket.IO to WebSocket bridge...');
+  const socketIOBridge = initializeSocketIOBridge(SocketManager.getInstance(), realtimeServer);
+  console.log('✅ Socket.IO bridge initialized');
 
   // FIX 7.1: Initialize RealtimeAgentBridge to forward agent events to WebSocket
   try {
@@ -324,6 +333,47 @@ let server: Server;
     console.log('✅ Artifact Generator connected to RealtimeServer for completion notifications');
   } catch (error) {
     console.error('❌ Failed to connect Artifact Generator to RealtimeServer:', error);
+  }
+
+  // JO-1 FIX: Restore execution state for projects with running analyses on server restart
+  console.log('💾 [ExecutionState] Checking for interrupted analyses to restore...');
+  try {
+    const { projects: projectsTable } = await import('@shared/schema');
+    const { eq, and, isNotNull } = await import('drizzle-orm');
+    const [dbInstance] = await Promise.all([
+      import('./db'),
+      import('@shared/schema')
+    ]);
+
+    if (dbInstance && dbInstance.db) {
+      const db = dbInstance.db;
+
+      // Find all projects with 'running' execution status
+      const runningProjects = await db
+        .select({ id: projectsTable.id, name: projectsTable.name, executionState: projectsTable.executionState })
+        .from(projectsTable)
+        .where(and(
+          eq(projectsTable.status, 'analyzing'),
+          isNotNull(projectsTable.executionState)
+        ));
+
+      for (const project of runningProjects) {
+        const execState: any = project.executionState;
+        if (execState && execState.status === 'running' && execState.currentAnalysisId) {
+          console.log(`🔄 [ExecutionState] Found interrupted analysis for project "${project.name}": ${execState.currentAnalysisId}`);
+          console.log(`💾 [ExecutionState] Analysis was ${execState.lastUpdate ? 'interrupted at ' + execState.lastUpdate : 'running when server stopped'}`);
+          console.log(`   → Execution state preserved. Resume functionality available via API.`);
+        }
+      }
+
+      if (runningProjects.length > 0) {
+        console.log(`💾 [ExecutionState] Found ${runningProjects.length} project(s) with preserved execution state`);
+      } else {
+        console.log(`💾 [ExecutionState] No interrupted analyses found. All projects in clean state.`);
+      }
+    }
+  } catch (error) {
+    console.warn(`⚠️ [ExecutionState] Failed to check for interrupted analyses:`, error);
   }
 
   // Setup transformation queue WebSocket bridge

@@ -20,6 +20,7 @@ export type {
 
 // Providers
 export { OpenAIEmbeddingProvider } from './openai-provider';
+export { OpenRouterEmbeddingProvider } from './openrouter-provider';
 export { GeminiEmbeddingProvider } from './gemini-provider';
 export { OllamaEmbeddingProvider } from './ollama-provider';
 export { TogetherEmbeddingProvider } from './together-provider';
