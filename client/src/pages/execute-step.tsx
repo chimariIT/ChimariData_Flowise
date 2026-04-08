@@ -1100,7 +1100,7 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
       ];
       for (const source of ssotSources) {
         if (source?.length > 0) {
-          analysesToExecute = [...new Set(source)];
+          analysesToExecute = [...new Set(source as string[])];
           console.log('[Execute] Restored analyses from journeyProgress SSOT:', analysesToExecute);
           setSelectedAnalyses(analysesToExecute);
           break;

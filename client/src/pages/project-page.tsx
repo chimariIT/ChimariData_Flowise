@@ -197,6 +197,7 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
 
     const MAX_VERIFY_ATTEMPTS = 3;
     const VERIFY_RETRY_DELAY_MS = 2000;
+    const isCheckoutSuccess = paymentStatus === 'success' && sessionId;
 
     const verifyPaymentSession = async (attempt: number): Promise<boolean> => {
       try {
