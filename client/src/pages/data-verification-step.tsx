@@ -35,6 +35,7 @@ import AgentCheckpoints from "@/components/agent-checkpoints";
 import { DescriptiveStatsLazy } from "@/components/LazyComponents";
 import { apiClient } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
+import { getJourneyDisplayConfig, isSimplifiedJourney } from "@/utils/journey-display";
 
 interface DataVerificationStepProps {
   journeyType: string;
@@ -58,6 +59,8 @@ export default function DataVerificationStep({
   renderAsContent = false
 }: DataVerificationStepProps) {
   const { toast } = useToast();
+  const displayConfig = getJourneyDisplayConfig(journeyType);
+  const simplified = isSimplifiedJourney(journeyType);
 
   // State for verification status
   const [verificationStatus, setVerificationStatus] = useState<VerificationStatus>({
@@ -304,6 +307,13 @@ export default function DataVerificationStep({
       updateVerificationStatus('piiReview', true);
     }
   }, [isLoading, dataQuality, qualityScore, schemaAnalysis, projectData, piiResults, verificationStatus]);
+
+  // Auto-approve all verification steps for simplified journeys with high quality scores
+  useEffect(() => {
+    if (simplified && qualityScore > 80) {
+      setVerificationStatus({ dataQuality: true, schemaValidation: true, piiReview: true, dataPreview: true, overallApproved: true });
+    }
+  }, [simplified, qualityScore]);
 
   const handlePIIReview = () => {
     if (piiResults && piiResults.detectedPII?.length > 0) {
@@ -711,15 +721,30 @@ export default function DataVerificationStep({
         </CardContent>
       </Card>
 
+      {/* Simplified auto-approval summary for non-tech users */}
+      {simplified && verificationStatus.overallApproved && qualityScore > 80 && (
+        <Card className="border-green-200 bg-green-50 mb-4">
+          <CardContent className="py-4">
+            <div className="flex items-center gap-3">
+              <CheckCircle className="w-6 h-6 text-green-600" />
+              <div>
+                <p className="font-medium text-green-900">Your data looks great!</p>
+                <p className="text-sm text-green-700">Quality score: {qualityScore}% — We've verified your data is ready for analysis.</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Detailed Verification Tabs - Moved to Top */}
       <Card>
         <Tabs defaultValue="preview" className="w-full">
-          <TabsList className="grid w-full grid-cols-5">
+          <TabsList className={`grid w-full ${simplified ? 'grid-cols-3' : 'grid-cols-5'}`}>
             <TabsTrigger value="preview">Preview</TabsTrigger>
             <TabsTrigger value="quality">Quality</TabsTrigger>
-            <TabsTrigger value="schema">Schema</TabsTrigger>
+            {!simplified && <TabsTrigger value="schema">Schema</TabsTrigger>}
             <TabsTrigger value="privacy">Privacy</TabsTrigger>
-            <TabsTrigger value="profiling">Profiling</TabsTrigger>
+            {!simplified && <TabsTrigger value="profiling">Profiling</TabsTrigger>}
           </TabsList>
 
           <TabsContent value="preview" className="space-y-4">
@@ -938,6 +963,7 @@ export default function DataVerificationStep({
             )}
           </TabsContent>
 
+          {!simplified && (
           <TabsContent value="schema" className="space-y-4">
             <Card>
               <CardHeader>
@@ -1003,6 +1029,7 @@ export default function DataVerificationStep({
               </CardContent>
             </Card>
           </TabsContent>
+          )}
 
           <TabsContent value="privacy" className="space-y-4">
             <Card>
@@ -1072,6 +1099,7 @@ export default function DataVerificationStep({
             </Card>
           </TabsContent>
 
+          {!simplified && (
           <TabsContent value="profiling" className="space-y-4">
             <Card>
               <CardHeader>
@@ -1106,6 +1134,7 @@ export default function DataVerificationStep({
               </CardContent>
             </Card>
           </TabsContent>
+          )}
         </Tabs >
       </Card >
 

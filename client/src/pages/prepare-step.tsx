@@ -832,6 +832,7 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
             setPrimaryAudience={setPrimaryAudience}
             decisionContext={decisionContext}
             setDecisionContext={setDecisionContext}
+            journeyType={journeyType}
           />
         </CardContent>
       </Card>

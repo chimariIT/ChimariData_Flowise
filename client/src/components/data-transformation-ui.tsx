@@ -98,6 +98,7 @@ export function DataTransformationUI({ projectId, project, onProjectUpdate, onNe
   } = useProject(projectId);
 
   const journeyType = project?.journeyType || 'non-tech';
+  const isSimplifiedUI = journeyType === 'non-tech' || journeyType === 'business' || journeyType === 'consultation';
 
   const schema = project?.schema || {};
   const fields = Object.keys(schema);
@@ -913,12 +914,18 @@ export function DataTransformationUI({ projectId, project, onProjectUpdate, onNe
 
                         <div className="mt-3 space-y-2">
                           <div className="text-sm">
-                            <span className="font-medium text-gray-700">Source:</span>{' '}
-                            <code className="bg-gray-100 px-2 py-1 rounded">{rec.sourceField}</code>
+                            <span className="font-medium text-gray-700">{isSimplifiedUI ? 'Data field:' : 'Source:'}</span>{' '}
+                            {isSimplifiedUI ? (
+                              <span className="font-medium">{rec.sourceField}</span>
+                            ) : (
+                              <code className="bg-gray-100 px-2 py-1 rounded">{rec.sourceField}</code>
+                            )}
                           </div>
                           <div className="text-sm">
-                            <span className="font-medium text-gray-700">Transformation:</span>{' '}
-                            {rec.transformation.description}
+                            <span className="font-medium text-gray-700">{isSimplifiedUI ? 'What we\'ll do:' : 'Transformation:'}</span>{' '}
+                            {isSimplifiedUI
+                              ? `We'll ${rec.transformation.description.charAt(0).toLowerCase()}${rec.transformation.description.slice(1)}`
+                              : rec.transformation.description}
                           </div>
                           {rec.relatedQuestions?.length > 0 && (
                             <div className="text-sm">

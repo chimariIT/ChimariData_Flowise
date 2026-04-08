@@ -48,13 +48,16 @@ interface TransformationPlanDisplayProps {
   plan: TransformationPlan;
   onExecutePlan?: () => void;
   isExecuting?: boolean;
+  journeyType?: string;
 }
 
 export function TransformationPlanDisplay({
   plan,
   onExecutePlan,
-  isExecuting = false
+  isExecuting = false,
+  journeyType = 'technical'
 }: TransformationPlanDisplayProps) {
+  const isSimplified = journeyType === 'non-tech' || journeyType === 'business' || journeyType === 'consultation';
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
 
   const toggleStep = (stepId: string) => {
@@ -82,7 +85,9 @@ export function TransformationPlanDisplay({
               Auto-Generated Transformation Plan
             </CardTitle>
             <CardDescription>
-              Review and execute the automated transformation steps
+              {isSimplified
+                ? "Your data is being prepared for analysis"
+                : "Review and execute the automated transformation steps"}
             </CardDescription>
           </div>
           {onExecutePlan && (
@@ -147,8 +152,12 @@ export function TransformationPlanDisplay({
         {totalSteps > 0 && (
           <div className="space-y-4">
             <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
-              <Code className="w-4 h-4 text-blue-600" />
-              Transformation Steps
+              {isSimplified ? (
+                <CheckCircle className="w-4 h-4 text-blue-600" />
+              ) : (
+                <Code className="w-4 h-4 text-blue-600" />
+              )}
+              {isSimplified ? "Data Preparation Steps" : "Transformation Steps"}
             </h3>
 
             {plan.transformationSteps.map((step, index) => {
@@ -201,15 +210,22 @@ export function TransformationPlanDisplay({
 
                       <CollapsibleContent>
                         <Separator className="my-3" />
-                        <div className="space-y-2">
-                          <div className="flex items-center gap-2 text-xs font-medium text-gray-700">
-                            <Code className="w-3 h-3" />
-                            Transformation Code
+                        {isSimplified ? (
+                          <div className="flex items-center gap-2 text-xs text-green-700 bg-green-50 rounded p-3">
+                            <CheckCircle className="w-3 h-3" />
+                            This step will be handled automatically
                           </div>
-                          <pre className="bg-gray-50 border border-gray-200 rounded p-3 text-xs font-mono overflow-x-auto">
-                            {step.code}
-                          </pre>
-                        </div>
+                        ) : (
+                          <div className="space-y-2">
+                            <div className="flex items-center gap-2 text-xs font-medium text-gray-700">
+                              <Code className="w-3 h-3" />
+                              Transformation Code
+                            </div>
+                            <pre className="bg-gray-50 border border-gray-200 rounded p-3 text-xs font-mono overflow-x-auto">
+                              {step.code}
+                            </pre>
+                          </div>
+                        )}
                       </CollapsibleContent>
                     </div>
                   </Collapsible>

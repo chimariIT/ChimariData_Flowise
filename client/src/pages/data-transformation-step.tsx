@@ -21,6 +21,7 @@ import { formatConfidence, getConfidenceBadgeVariant } from '@/lib/utils';
 // AgentCheckpoints removed - coordination shown on verification step + project overview
 import { useJourneyDataOptional } from '@/contexts/JourneyDataContext';
 import { useProject, JourneyProgress } from '@/hooks/useProject';
+import { isSimplifiedJourney } from '@/utils/journey-display';
 
 interface DataTransformationStepProps {
     journeyType: string;
@@ -90,6 +91,7 @@ export default function DataTransformationStep({
 }: DataTransformationStepProps) {
     const { toast } = useToast();
     const [, setLocation] = useLocation();
+    const simplified = isSimplifiedJourney(journeyType);
 
     // Use shared journey context for data continuity between steps
     const journeyContext = useJourneyDataOptional();
@@ -2627,10 +2629,92 @@ export default function DataTransformationStep({
                 <CardContent className="p-6">
                     <div className="flex items-center justify-center">
                         <RefreshCw className="w-6 h-6 animate-spin mr-2" />
-                        <span>Loading transformation requirements...</span>
+                        <span>{simplified ? 'Preparing your data...' : 'Loading transformation requirements...'}</span>
                     </div>
                 </CardContent>
             </Card>
+        );
+    }
+
+    // Simplified journey: show a progress/summary view instead of the full mapping table
+    if (simplified && (transformedPreview || isExecuting || autoExecuteTriggered)) {
+        const mappedCount = transformationMappings.filter(m => m.sourceColumn || (m.sourceColumns && m.sourceColumns.length > 0)).length;
+        const totalCount = transformationMappings.length;
+
+        return (
+            <div className="space-y-6">
+                <Card className="border-blue-200 bg-gradient-to-br from-blue-50 to-cyan-50">
+                    <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                            {transformedPreview ? (
+                                <CheckCircle className="w-5 h-5 text-green-600" />
+                            ) : (
+                                <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
+                            )}
+                            {transformedPreview ? 'Your Data is Ready' : 'Preparing Your Data'}
+                        </CardTitle>
+                        <CardDescription>
+                            {transformedPreview
+                                ? `We've automatically prepared ${mappedCount} data fields for your analysis.`
+                                : 'We\'re automatically preparing your data for analysis. This usually takes a moment.'}
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        {isExecuting && (
+                            <div className="mb-4">
+                                <Progress value={60} className="h-2" />
+                                <p className="text-xs text-blue-600 mt-1">Processing transformations...</p>
+                            </div>
+                        )}
+
+                        {transformedPreview && (
+                            <div className="space-y-3">
+                                <div className="grid grid-cols-3 gap-4 text-center">
+                                    <div className="bg-white rounded-lg p-3 border">
+                                        <p className="text-2xl font-bold text-green-600">{mappedCount}</p>
+                                        <p className="text-xs text-gray-600">Fields prepared</p>
+                                    </div>
+                                    <div className="bg-white rounded-lg p-3 border">
+                                        <p className="text-2xl font-bold text-blue-600">{transformedPreview?.rows?.length || transformedPreview?.recordCount || '---'}</p>
+                                        <p className="text-xs text-gray-600">Records</p>
+                                    </div>
+                                    <div className="bg-white rounded-lg p-3 border">
+                                        <p className="text-2xl font-bold text-purple-600">{totalCount}</p>
+                                        <p className="text-xs text-gray-600">Total elements</p>
+                                    </div>
+                                </div>
+
+                                <Alert className="bg-green-50 border-green-200">
+                                    <CheckCircle className="h-4 w-4 text-green-600" />
+                                    <AlertDescription className="text-sm text-green-800">
+                                        Your data has been prepared and is ready for analysis. Click Continue to proceed.
+                                    </AlertDescription>
+                                </Alert>
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
+
+                {/* Navigation */}
+                <div className="flex items-center justify-between pt-4 border-t">
+                    {onPrevious && (
+                        <Button variant="outline" onClick={onPrevious}>
+                            <ArrowLeft className="w-4 h-4 mr-2" />
+                            Previous Step
+                        </Button>
+                    )}
+                    {onNext && (
+                        <Button
+                            onClick={onNext}
+                            disabled={!transformedPreview}
+                            className="ml-auto bg-blue-600 hover:bg-blue-700"
+                        >
+                            Continue to Analysis Plan
+                            <ArrowRight className="w-4 h-4 ml-2" />
+                        </Button>
+                    )}
+                </div>
+            </div>
         );
     }
 
