@@ -17,6 +17,90 @@ type RequestOptions = {
   signal?: AbortSignal;
 };
 
+/**
+ * Normalize Python backend responses to match frontend expectations.
+ * Handles common snake_case → camelCase field mapping on user/project objects.
+ * Applied to all JSON responses from the request() method.
+ */
+function normalizeApiResponse(data: any): any {
+  if (!data || typeof data !== 'object') return data;
+
+  // Normalize user objects (top-level or nested)
+  const normalizeUser = (u: any) => {
+    if (!u || typeof u !== 'object') return u;
+    // name → firstName/lastName
+    if (u.name && !u.firstName) {
+      const parts = u.name.split(' ');
+      u.firstName = parts[0] || '';
+      u.lastName = parts.slice(1).join(' ') || '';
+    }
+    // snake_case booleans/fields
+    if (u.is_admin !== undefined && u.isAdmin === undefined) u.isAdmin = u.is_admin;
+    if (u.is_active !== undefined && u.isActive === undefined) u.isActive = u.is_active;
+    // subscription tier variants
+    if (u.tier && !u.subscriptionTier) u.subscriptionTier = u.tier;
+    if (u.subscription_tier && !u.subscriptionTier) u.subscriptionTier = u.subscription_tier;
+    // created/updated timestamps
+    if (u.created_at && !u.createdAt) u.createdAt = u.created_at;
+    if (u.updated_at && !u.updatedAt) u.updatedAt = u.updated_at;
+    return u;
+  };
+
+  // Normalize project objects
+  const normalizeProject = (p: any) => {
+    if (!p || typeof p !== 'object') return p;
+    if (p.created_at && !p.createdAt) p.createdAt = p.created_at;
+    if (p.updated_at && !p.updatedAt) p.updatedAt = p.updated_at;
+    if (p.user_id && !p.userId) p.userId = p.user_id;
+    if (p.journey_type && !p.journeyType) p.journeyType = p.journey_type;
+    if (p.journey_progress && !p.journeyProgress) p.journeyProgress = p.journey_progress;
+    if (p.analysis_results && !p.analysisResults) p.analysisResults = p.analysis_results;
+    if (p.is_paid !== undefined && p.isPaid === undefined) p.isPaid = p.is_paid;
+    if (p.payment_status && !p.paymentStatus) p.paymentStatus = p.payment_status;
+    if (p.record_count !== undefined && p.recordCount === undefined) p.recordCount = p.record_count;
+    return p;
+  };
+
+  // Normalize dataset objects
+  const normalizeDataset = (d: any) => {
+    if (!d || typeof d !== 'object') return d;
+    if (d.created_at && !d.createdAt) d.createdAt = d.created_at;
+    if (d.updated_at && !d.updatedAt) d.updatedAt = d.updated_at;
+    if (d.user_id && !d.userId) d.userId = d.user_id;
+    if (d.source_type && !d.sourceType) d.sourceType = d.source_type;
+    if (d.original_file_name && !d.originalFileName) d.originalFileName = d.original_file_name;
+    if (d.record_count !== undefined && d.recordCount === undefined) d.recordCount = d.record_count;
+    if (d.ingestion_metadata && !d.ingestionMetadata) d.ingestionMetadata = d.ingestion_metadata;
+    if (d.sample_data && !d.sampleData) d.sampleData = d.sample_data;
+    return d;
+  };
+
+  // Apply normalizations to known response shapes
+  if (data.user) normalizeUser(data.user);
+  if (data.project) normalizeProject(data.project);
+  if (data.dataset) normalizeDataset(data.dataset);
+
+  // Normalize arrays of users/projects/datasets
+  if (Array.isArray(data.users)) data.users.forEach(normalizeUser);
+  if (Array.isArray(data.projects)) data.projects.forEach(normalizeProject);
+  if (Array.isArray(data.datasets)) {
+    data.datasets.forEach((item: any) => {
+      if (item.dataset) normalizeDataset(item.dataset);
+      else normalizeDataset(item);
+    });
+  }
+
+  // Top-level project response (GET /api/projects/:id)
+  if (data.id && data.journey_progress !== undefined) normalizeProject(data);
+  if (data.id && data.user_id !== undefined) normalizeProject(data);
+
+  // Normalize success/total for pagination
+  if (data.total_count !== undefined && data.totalCount === undefined) data.totalCount = data.total_count;
+  if (data.total_pages !== undefined && data.totalPages === undefined) data.totalPages = data.total_pages;
+
+  return data;
+}
+
 export class APIClient {
   private refreshPromise: Promise<boolean> | null = null;
 
@@ -236,7 +320,8 @@ export class APIClient {
           return undefined as T;
         }
 
-        return (await response.json()) as T;
+        const json = await response.json();
+        return normalizeApiResponse(json) as T;
       } catch (error: any) {
         if (error?.name === 'AbortError') {
           throw error;
@@ -905,27 +990,7 @@ export class APIClient {
       }
 
       try {
-        const result = await response.json();
-
-        // Normalize Python backend response to match frontend expected format
-        // Python backend may return: { name, is_admin, tier } instead of { firstName, lastName, isAdmin, subscriptionTier }
-        if (result?.user) {
-          const u = result.user;
-          if (u.name && !u.firstName) {
-            const parts = u.name.split(' ');
-            u.firstName = parts[0] || '';
-            u.lastName = parts.slice(1).join(' ') || '';
-          }
-          if (u.is_admin !== undefined && u.isAdmin === undefined) {
-            u.isAdmin = u.is_admin;
-          }
-          if (u.tier && !u.subscriptionTier) {
-            u.subscriptionTier = u.tier;
-          }
-          if (u.subscription_tier && !u.subscriptionTier) {
-            u.subscriptionTier = u.subscription_tier;
-          }
-        }
+        const result = normalizeApiResponse(await response.json());
 
         // Automatically persist authentication token for any consumer of apiClient.login
         if (result?.token) {
@@ -979,7 +1044,12 @@ export class APIClient {
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(userData),
+      body: JSON.stringify({
+        ...userData,
+        // Send both formats so Python backend (snake_case) and Node.js (camelCase) both work
+        first_name: userData.firstName,
+        last_name: userData.lastName,
+      }),
       credentials: 'include',
     });
 
@@ -996,7 +1066,7 @@ export class APIClient {
     }
 
     try {
-      const result = await response.json();
+      const result = normalizeApiResponse(await response.json());
 
       if ((result as any)?.token) {
         localStorage.setItem('auth_token', (result as any).token);
