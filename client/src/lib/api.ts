@@ -907,6 +907,26 @@ export class APIClient {
       try {
         const result = await response.json();
 
+        // Normalize Python backend response to match frontend expected format
+        // Python backend may return: { name, is_admin, tier } instead of { firstName, lastName, isAdmin, subscriptionTier }
+        if (result?.user) {
+          const u = result.user;
+          if (u.name && !u.firstName) {
+            const parts = u.name.split(' ');
+            u.firstName = parts[0] || '';
+            u.lastName = parts.slice(1).join(' ') || '';
+          }
+          if (u.is_admin !== undefined && u.isAdmin === undefined) {
+            u.isAdmin = u.is_admin;
+          }
+          if (u.tier && !u.subscriptionTier) {
+            u.subscriptionTier = u.tier;
+          }
+          if (u.subscription_tier && !u.subscriptionTier) {
+            u.subscriptionTier = u.subscription_tier;
+          }
+        }
+
         // Automatically persist authentication token for any consumer of apiClient.login
         if (result?.token) {
           console.log('🔐 [LOGIN] Token received, length:', result.token.length);

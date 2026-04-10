@@ -79,6 +79,15 @@ export class RealtimeClient {
     if (typeof window !== 'undefined') {
       window.addEventListener('online', this.handleOnline.bind(this));
       window.addEventListener('offline', this.handleOffline.bind(this));
+
+      // Auto-connect when auth token becomes available (after login)
+      window.addEventListener('auth-token-stored', () => {
+        if (this.connectionState === 'disconnected' || this.connectionState === 'failed') {
+          this.log('Auth token stored, connecting WebSocket...');
+          this.reconnectAttempts = 0;
+          this.connect();
+        }
+      });
     }
   }
 
@@ -261,9 +270,15 @@ export class RealtimeClient {
 
     this.stopHeartbeat();
 
-    // Attempt reconnection unless it was a manual close
-    if (event.code !== 1000 && event.code !== 1001) {
+    // Don't reconnect if:
+    // - Manual close (1000/1001)
+    // - No auth token available (403 from server — reconnecting is pointless until login)
+    const hasToken = !!this.getAuthToken();
+    if (event.code !== 1000 && event.code !== 1001 && hasToken) {
       this.scheduleReconnect();
+    } else if (!hasToken) {
+      this.log('No auth token available, skipping reconnection until login');
+      this.setConnectionState('disconnected');
     }
   }
 
