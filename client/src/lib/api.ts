@@ -25,6 +25,14 @@ type RequestOptions = {
 function normalizeApiResponse(data: any): any {
   if (!data || typeof data !== 'object') return data;
 
+  // Python backend wraps many responses in { success, data: {...}, error, errors }
+  // Unwrap the data envelope so consumers see a flat response
+  if (data.data && typeof data.data === 'object' && !Array.isArray(data.data) && data.success !== undefined) {
+    // Merge data fields up to top level (preserving success, error, message)
+    const { data: inner, ...outer } = data;
+    data = { ...outer, ...inner };
+  }
+
   // Normalize user objects (top-level or nested)
   const normalizeUser = (u: any) => {
     if (!u || typeof u !== 'object') return u;
@@ -990,7 +998,13 @@ export class APIClient {
       }
 
       try {
-        const result = normalizeApiResponse(await response.json());
+        const raw = await response.json();
+        // Python backend wraps response in { success, data: { token, user } }
+        // Unwrap the data envelope so token/user are at top level
+        const unwrapped = raw?.data && (raw.data.token || raw.data.user)
+          ? { ...raw, ...raw.data }
+          : raw;
+        const result = normalizeApiResponse(unwrapped);
 
         // Automatically persist authentication token for any consumer of apiClient.login
         if (result?.token) {
@@ -1018,6 +1032,13 @@ export class APIClient {
 
           this.dispatchAuthEvent('auth-token-stored');
           console.log('🔐 [LOGIN] Event dispatched: auth-token-stored');
+        }
+
+        // Cache user data for getCurrentUser fallback (Python backend doesn't have /auth/user)
+        if (result?.user) {
+          try {
+            localStorage.setItem('auth_user', JSON.stringify(result.user));
+          } catch { /* ignore storage errors */ }
         }
 
         return result;
@@ -1080,36 +1101,90 @@ export class APIClient {
   }
 
   async logout(): Promise<any> {
-    const response = await fetch(`${API_BASE}/api/auth/logout`, {
-      method: 'POST',
-      credentials: 'include',
-    });
+    // Always clear local auth state regardless of backend response
+    localStorage.removeItem('auth_token');
+    localStorage.removeItem('auth_user');
+    this.dispatchAuthEvent('auth-token-cleared');
 
-    if (!response.ok) {
-      throw new Error(`Logout failed: ${response.status}`);
+    try {
+      const response = await fetch(`${API_BASE}/api/auth/logout`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: this.buildAuthHeaders({ 'Content-Type': 'application/json' }),
+      });
+
+      // Python backend may not have /auth/logout — treat 404 as success
+      if (response.ok || response.status === 404) {
+        return { success: true };
+      }
+
+      // Other errors — still logged out locally
+      console.warn(`Logout endpoint returned ${response.status}, but local auth cleared`);
+      return { success: true };
+    } catch (error) {
+      // Network error — still logged out locally
+      console.warn('Logout request failed, but local auth cleared:', error);
+      return { success: true };
     }
-
-    return await response.json();
   }
 
   async getCurrentUser(): Promise<any> {
     const token = localStorage.getItem('auth_token');
     if (!token) {
-      // Return null instead of throwing to allow graceful fallback
       return null;
     }
 
+    // Try /auth/user first (Node.js backend), fall back to /auth/refresh (Python backend)
+    // Python backend doesn't have a /auth/user GET endpoint, but /auth/refresh returns
+    // a new token and we can decode user from the stored login data
     try {
-      const data = await this.request<{ success: boolean; user: any }>(
+      const data = await this.request<any>(
         '/api/auth/user',
-        { method: 'GET' }
+        { method: 'GET' },
+        { treat404AsNull: true }
       );
 
-      return data.success ? data.user : data;
+      if (data?.success) {
+        const user = data.data?.user || data.user;
+        return user || data;
+      }
+
+      // /auth/user returned 404 or no user — try /auth/refresh to validate token
+      if (data === null) {
+        console.log('[AUTH] /auth/user not available, trying /auth/refresh to validate token');
+        const refreshData = await this.request<any>(
+          '/api/auth/refresh',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+          }
+        );
+
+        if (refreshData?.success && refreshData?.data?.token) {
+          // Update token
+          localStorage.setItem('auth_token', refreshData.data.token);
+          this.dispatchAuthEvent('auth-token-stored');
+        }
+
+        // Return user from refresh response if available, otherwise decode from stored login
+        const refreshUser = refreshData?.data?.user || refreshData?.user;
+        if (refreshUser) return refreshUser;
+
+        // Last resort: return minimal user from localStorage cache
+        const cachedUser = localStorage.getItem('auth_user');
+        if (cachedUser) {
+          try { return JSON.parse(cachedUser); } catch { /* ignore */ }
+        }
+
+        // Token is valid (refresh succeeded) but no user data — return minimal object
+        return { authenticated: true };
+      }
+
+      return data;
     } catch (error) {
-      // If token is invalid/expired, clear it and return null
       console.warn('Failed to get current user, token may be expired:', error);
       localStorage.removeItem('auth_token');
+      localStorage.removeItem('auth_user');
       this.dispatchAuthEvent('auth-token-cleared');
       return null;
     }

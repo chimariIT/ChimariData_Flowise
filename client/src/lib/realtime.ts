@@ -128,9 +128,14 @@ export class RealtimeClient {
       // Get authentication token
       const authToken = this.getAuthToken();
       const baseUrl = this.getWebSocketUrl(); // Use fresh URL each time
-      const url = authToken 
-        ? `${baseUrl}?token=${encodeURIComponent(authToken)}`
-        : baseUrl;
+      // Python backend uses /ws/{session_id} path pattern instead of /ws?token=
+      // Generate a session ID from the auth token or use a random one
+      const sessionId = authToken
+        ? authToken.substring(0, 16).replace(/[^a-zA-Z0-9]/g, 'x')
+        : `anon_${Date.now()}`;
+      const url = authToken
+        ? `${baseUrl}/${sessionId}?token=${encodeURIComponent(authToken)}`
+        : `${baseUrl}/${sessionId}`;
 
       console.log('[DEBUG] WebSocket connecting to:', url); // Debug logging
       this.ws = new WebSocket(url);
