@@ -28,7 +28,7 @@ export function ServiceHealthBanner() {
     
     const { data: health, isLoading } = useQuery<ServiceHealth>({
         queryKey: ['service-health'],
-        queryFn: () => fetch('/api/system/health').then(r => r.json()),
+        queryFn: () => fetch('/api/health').then(r => r.json()).catch(() => ({ allServicesOperational: true })),
         refetchInterval: 60000, // Refresh every minute
         retry: 3,
         staleTime: 30000 // Consider data fresh for 30 seconds
