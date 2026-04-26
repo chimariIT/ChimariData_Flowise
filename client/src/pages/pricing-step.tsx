@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -58,6 +59,19 @@ type NormalizedBreakdown = {
       used?: Record<string, number>;
       remaining?: Record<string, number>;
     };
+  }>;
+};
+
+type ConfidenceGate = {
+  passed?: boolean;
+  threshold?: number;
+  overallConfidence?: number;
+  questionUnderstandingConfidence?: number;
+  datasetUnderstandingConfidence?: number;
+  blockers?: Array<{
+    code?: string;
+    count?: number;
+    message?: string;
   }>;
 };
 
@@ -138,6 +152,7 @@ const normalizeBillingBreakdown = (
 };
 
 export default function PricingStep({ journeyType, onNext, onPrevious }: PricingStepProps) {
+  const [, setLocation] = useLocation();
   const [selectedPlan, setSelectedPlan] = useState<string>('per-analysis');
   const [paymentMethod, setPaymentMethod] = useState<'card' | 'paypal' | 'bank'>('card');
   const [billingLoading, setBillingLoading] = useState<boolean>(false);
@@ -180,6 +195,104 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
     updateProgress,
     isLoading: projectLoading
   } = useProject(localStorage.getItem('currentProjectId') || undefined);
+
+  const confidenceGate = useMemo<ConfidenceGate | null>(() => {
+    const requirementsDocument = (journeyProgress as any)?.requirementsDocument;
+    if (!requirementsDocument || typeof requirementsDocument !== "object") {
+      return null;
+    }
+
+    const gate = requirementsDocument.confidenceGate;
+    if (gate && typeof gate === "object") {
+      return gate as ConfidenceGate;
+    }
+
+    const legacyReady = Boolean(requirementsDocument?.completeness?.readyForExecution);
+    return {
+      passed: legacyReady,
+      overallConfidence: legacyReady ? 0.8 : 0.5,
+      threshold: 0.74,
+      blockers: legacyReady ? [] : [{
+        code: "legacy_not_ready",
+        message: "Your requirements are not ready yet. Please complete question and data mapping checks first.",
+      }],
+    };
+  }, [journeyProgress]);
+
+  const confidenceBlocked = Boolean(confidenceGate && confidenceGate.passed === false);
+  const blockerList = useMemo(() => {
+    const blockers = Array.isArray(confidenceGate?.blockers) ? confidenceGate?.blockers : [];
+    return blockers.map((blocker) => {
+      const code = String(blocker?.code || "");
+      const count = typeof blocker?.count === "number" ? blocker.count : null;
+      const countLabel = count && count > 1 ? `${count} items` : count === 1 ? "1 item" : null;
+
+      switch (code) {
+        case "question_data_gap":
+          return {
+            code,
+            severity: "high",
+            title: "Question needs a clearer metric",
+            description: "We could not connect one or more questions to a trusted metric in your dataset.",
+            countLabel,
+            action: "questions",
+          };
+        case "question_low_clarity":
+          return {
+            code,
+            severity: "medium",
+            title: "Question wording needs refinement",
+            description: "Some questions are still too broad to guarantee reliable analysis.",
+            countLabel,
+            action: "questions",
+          };
+        case "required_metric_unmapped":
+          return {
+            code,
+            severity: "high",
+            title: "Required data fields are not mapped",
+            description: "At least one required metric is not connected to a dataset column yet.",
+            countLabel,
+            action: "mapping",
+          };
+        case "required_metric_partial_mapping":
+          return {
+            code,
+            severity: "medium",
+            title: "Some mappings need confirmation",
+            description: "Some required fields have suggested matches but still need confirmation.",
+            countLabel,
+            action: "mapping",
+          };
+        default:
+          return {
+            code: code || "generic",
+            severity: "medium",
+            title: "Readiness check requires attention",
+            description: blocker?.message || "Please review your questions and data mapping before payment.",
+            countLabel,
+            action: "general",
+          };
+      }
+    });
+  }, [confidenceGate]);
+
+  const questionFixRoute = useMemo(() => {
+    if (['guided', 'non-tech', 'business'].includes(journeyType)) {
+      return `/journeys/${journeyType}/data`;
+    }
+    return `/journeys/${journeyType}/prepare`;
+  }, [journeyType]);
+
+  const mappingFixRoute = useMemo(() => {
+    if (['guided', 'non-tech', 'business'].includes(journeyType)) {
+      return `/journeys/${journeyType}/data`;
+    }
+    return `/journeys/${journeyType}/data-verification`;
+  }, [journeyType]);
+
+  const hasQuestionBlocker = blockerList.some((item) => item.action === "questions");
+  const hasMappingBlocker = blockerList.some((item) => item.action === "mapping");
 
   // ✅ PHASE 3 FIX: Fetch datasets to get actual recordCount for pricing display
   // This fixes "Data Rows = 0" issue - previously read from executionSummary which is only populated after execution
@@ -846,6 +959,16 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
       return;
     }
 
+    if (confidenceBlocked) {
+      setPaymentError("Please resolve the readiness check items before payment.");
+      toast({
+        title: "Action needed before payment",
+        description: "Update your questions and data mappings first so we can deliver reliable results.",
+        variant: "destructive"
+      });
+      return;
+    }
+
     // Get the final amount to charge
     const amountCents = authoritativeCostCents;
     if (!amountCents || amountCents <= 0) {
@@ -906,6 +1029,97 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
                 <p className="text-sm text-yellow-800">{validationWarning}</p>
               </div>
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Readiness Confidence Gate */}
+      {confidenceGate && (
+        <Card className={confidenceBlocked ? "border-amber-300 bg-amber-50" : "border-green-200 bg-green-50"}>
+          <CardHeader>
+            <CardTitle className={`flex items-center gap-2 ${confidenceBlocked ? "text-amber-900" : "text-green-900"}`}>
+              {confidenceBlocked ? <AlertTriangle className="w-5 h-5" /> : <CheckCircle className="w-5 h-5" />}
+              Readiness Check
+            </CardTitle>
+            <CardDescription className={confidenceBlocked ? "text-amber-800" : "text-green-800"}>
+              {confidenceBlocked
+                ? "Before payment, we need higher confidence that your questions and data are aligned."
+                : "Question understanding and dataset mapping are strong. You are ready to proceed."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="rounded-lg border bg-white/70 p-3">
+                <p className="text-xs text-gray-600">Overall confidence</p>
+                <p className="text-lg font-semibold text-gray-900">
+                  {typeof confidenceGate?.overallConfidence === "number"
+                    ? `${Math.round(confidenceGate.overallConfidence * 100)}%`
+                    : "—"}
+                </p>
+              </div>
+              <div className="rounded-lg border bg-white/70 p-3">
+                <p className="text-xs text-gray-600">Question understanding</p>
+                <p className="text-lg font-semibold text-gray-900">
+                  {typeof confidenceGate?.questionUnderstandingConfidence === "number"
+                    ? `${Math.round(confidenceGate.questionUnderstandingConfidence * 100)}%`
+                    : "—"}
+                </p>
+              </div>
+              <div className="rounded-lg border bg-white/70 p-3">
+                <p className="text-xs text-gray-600">Dataset grounding</p>
+                <p className="text-lg font-semibold text-gray-900">
+                  {typeof confidenceGate?.datasetUnderstandingConfidence === "number"
+                    ? `${Math.round(confidenceGate.datasetUnderstandingConfidence * 100)}%`
+                    : "—"}
+                </p>
+              </div>
+            </div>
+
+            {confidenceBlocked && blockerList.length > 0 && (
+              <div className="space-y-2">
+                {blockerList.map((blocker, index) => (
+                  <div key={`${blocker.code}-${index}`} className="rounded-lg border border-amber-200 bg-white p-3">
+                    <p className="text-sm font-semibold text-amber-900">{blocker.title}</p>
+                    <p className="text-sm text-amber-800 mt-1">{blocker.description}</p>
+                    {blocker.countLabel && (
+                      <p className="text-xs text-amber-700 mt-1">{blocker.countLabel}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {confidenceBlocked && (
+              <div className="flex flex-wrap gap-2">
+                {hasQuestionBlocker && (
+                  <Button
+                    variant="outline"
+                    className="border-amber-300 text-amber-900 hover:bg-amber-100"
+                    onClick={() => setLocation(questionFixRoute)}
+                  >
+                    Fix Questions
+                  </Button>
+                )}
+                {hasMappingBlocker && (
+                  <Button
+                    variant="outline"
+                    className="border-amber-300 text-amber-900 hover:bg-amber-100"
+                    onClick={() => setLocation(mappingFixRoute)}
+                  >
+                    Fix Data Mapping
+                  </Button>
+                )}
+                {!hasQuestionBlocker && !hasMappingBlocker && (
+                  <Button
+                    variant="outline"
+                    className="border-amber-300 text-amber-900 hover:bg-amber-100"
+                    onClick={() => setLocation(questionFixRoute)}
+                  >
+                    Review Goals & Data
+                  </Button>
+                )}
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
@@ -1389,7 +1603,7 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
               <Button
                 onClick={handlePayment}
                 className="w-full bg-blue-600 hover:bg-blue-700 text-white mt-2"
-                disabled={!selectedPlan || paymentProcessing || !projectId}
+                disabled={!selectedPlan || paymentProcessing || !projectId || confidenceBlocked}
               >
                 {paymentProcessing ? (
                   <>
@@ -1404,6 +1618,11 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
                   </>
                 )}
               </Button>
+              {confidenceBlocked && (
+                <p className="text-sm text-amber-800">
+                  Payment is paused until the readiness check passes.
+                </p>
+              )}
             </div>
           </CardContent>
         </Card>

@@ -145,7 +145,7 @@ export class DataQualityService {
         accuracy: Math.round(qualityMetrics.accuracy),
         validity: Math.round(qualityMetrics.validity),
       },
-      schema: this.analyzeSchema(data),
+      schema: this.inferSchemaFromRows(data),
       columnMetrics: this.analyzeColumns(data, schema),
       issues,
       recommendations,
@@ -206,7 +206,7 @@ export class DataQualityService {
     console.log(`[Quality] Inferring schema from ${data.length} rows`);
 
     // Infer schema from data
-    const schema = this.analyzeSchema(data);
+    const schema = this.inferSchemaFromRows(data);
 
     return schema;
   }
@@ -268,8 +268,8 @@ export class DataQualityService {
       columnStats[column] = {
         type: Array.from(types).join(','),
         nullRate: nullCount / data.length,
-        uniqueCount: new Set(values).length,
-        uniquenessRate: (new Set(values).length / values.length) * 100,
+        uniqueCount: new Set(values).size,
+        uniquenessRate: values.length > 0 ? (new Set(values).size / values.length) * 100 : 0,
       };
     }
 
@@ -279,7 +279,7 @@ export class DataQualityService {
     const consistency = (totalConsistent / totalValid) * 100;
 
     // Calculate uniqueness
-    const totalUniqueRecords = new Set(data.map((row) => JSON.stringify(row))).length;
+    const totalUniqueRecords = new Set(data.map((row) => JSON.stringify(row))).size;
     const uniqueness = (totalUniqueRecords / data.length) * 100;
 
     // Calculate accuracy (basic check)
@@ -297,7 +297,7 @@ export class DataQualityService {
   /**
    * Analyze schema from data
    */
-  private analyzeSchema(data: any[]): Record<string, any> {
+  private inferSchemaFromRows(data: any[]): Record<string, any> {
     if (data.length === 0) {
       return {};
     }
@@ -365,8 +365,8 @@ export class DataQualityService {
       columnMetrics[column] = {
         nullCount: data.length - values.length,
         nullRate: (data.length - values.length) / data.length,
-        uniqueCount: new Set(values).length,
-        uniquenessRate: (new Set(values).length / values.length) * 100,
+        uniqueCount: new Set(values).size,
+        uniquenessRate: values.length > 0 ? (new Set(values).size / values.length) * 100 : 0,
         sampleValues: values.slice(0, 5).map((v) =>
           typeof v === 'object' ? JSON.stringify(v) : String(v)
         ),

@@ -26,6 +26,10 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
 
+const rawBackendTarget = process.env.PYTHON_BACKEND_URL || "http://127.0.0.1:8000";
+const normalizedBackendTarget = rawBackendTarget.replace("localhost", "127.0.0.1");
+const normalizedBackendWsTarget = normalizedBackendTarget.replace(/^http/i, "ws");
+
 export default defineConfig({
   plugins: [
     react(),
@@ -122,14 +126,14 @@ export default defineConfig({
       // ========================================================================
       '/api/v1': {
         // Routes that explicitly use /api/v1 (admin pages rewritten for Python backend)
-        target: 'http://localhost:8000',
+        target: normalizedBackendTarget,
         changeOrigin: true,
         secure: false,
       },
       '/api': {
         // Legacy routes: frontend calls /api/* → Python backend at /*
         // The Python backend includes legacy routes at root (without /api prefix)
-        target: 'http://localhost:8000',
+        target: normalizedBackendTarget,
         changeOrigin: true,
         secure: false,
         rewrite: (path: string) => path.replace(/^\/api/, ''),
@@ -165,7 +169,7 @@ export default defineConfig({
       // 2. Ensure Node.js backend is running with WebSocket enabled
       // ========================================================================
       '/ws': {
-        target: 'ws://localhost:8000',  // Python Backend WebSocket (Primary)
+        target: normalizedBackendWsTarget,  // Python Backend WebSocket (Primary)
         ws: true,
         changeOrigin: true,
         configure: (proxy) => {

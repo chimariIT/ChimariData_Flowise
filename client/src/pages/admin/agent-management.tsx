@@ -455,7 +455,7 @@ const AgentManagement: React.FC = () => {
           <div className="space-y-8">
             {/* Key Metrics */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-              <div className="bg-white rounded-lg shadow p-6">
+              <div className="card bg-white rounded-lg shadow p-6">
                 <div className="flex items-center">
                   <div className="p-2 bg-blue-100 rounded-lg">
                     <Bot className="h-6 w-6 text-blue-600" />
@@ -467,7 +467,7 @@ const AgentManagement: React.FC = () => {
                 </div>
               </div>
 
-              <div className="bg-white rounded-lg shadow p-6">
+              <div className="card bg-white rounded-lg shadow p-6">
                 <div className="flex items-center">
                   <div className="p-2 bg-green-100 rounded-lg">
                     <CheckCircle className="h-6 w-6 text-green-600" />
@@ -481,7 +481,7 @@ const AgentManagement: React.FC = () => {
                 </div>
               </div>
 
-              <div className="bg-white rounded-lg shadow p-6">
+              <div className="card bg-white rounded-lg shadow p-6">
                 <div className="flex items-center">
                   <div className="p-2 bg-yellow-100 rounded-lg">
                     <Clock className="h-6 w-6 text-yellow-600" />
@@ -495,7 +495,7 @@ const AgentManagement: React.FC = () => {
                 </div>
               </div>
 
-              <div className="bg-white rounded-lg shadow p-6">
+              <div className="card bg-white rounded-lg shadow p-6">
                 <div className="flex items-center">
                   <div className="p-2 bg-purple-100 rounded-lg">
                     <MessageSquare className="h-6 w-6 text-purple-600" />
@@ -949,6 +949,8 @@ const AgentManagement: React.FC = () => {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
                 <input
                   type="text"
+                  name="name"
+                  placeholder="Agent name"
                   value={newAgentData.name}
                   onChange={(e) => setNewAgentData(prev => ({ ...prev, name: e.target.value }))}
                   className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
@@ -958,6 +960,7 @@ const AgentManagement: React.FC = () => {
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
                 <select
+                  name="type"
                   value={newAgentData.type}
                   onChange={(e) => setNewAgentData(prev => ({ ...prev, type: e.target.value }))}
                   className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
@@ -975,6 +978,8 @@ const AgentManagement: React.FC = () => {
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
                 <textarea
+                  name="description"
+                  placeholder="Describe what this agent does"
                   value={newAgentData.description}
                   onChange={(e) => setNewAgentData(prev => ({ ...prev, description: e.target.value }))}
                   rows={3}
@@ -988,6 +993,7 @@ const AgentManagement: React.FC = () => {
                 </label>
                 <input
                   type="text"
+                  name="capabilities"
                   value={newAgentData.capabilities}
                   onChange={(e) => setNewAgentData(prev => ({ ...prev, capabilities: e.target.value }))}
                   placeholder="capability1, capability2, capability3"
@@ -1000,6 +1006,7 @@ const AgentManagement: React.FC = () => {
                   <label className="block text-sm font-medium text-gray-700 mb-1">Max Concurrent Tasks</label>
                   <input
                     type="number"
+                    name="maxConcurrentTasks"
                     value={newAgentData.maxConcurrentTasks}
                     onChange={(e) => setNewAgentData(prev => ({ ...prev, maxConcurrentTasks: parseInt(e.target.value) }))}
                     className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
@@ -1010,6 +1017,7 @@ const AgentManagement: React.FC = () => {
                   <label className="block text-sm font-medium text-gray-700 mb-1">Priority</label>
                   <input
                     type="number"
+                    name="priority"
                     min="1"
                     max="5"
                     value={newAgentData.priority}
@@ -1029,10 +1037,11 @@ const AgentManagement: React.FC = () => {
               </button>
               <button
                 onClick={handleCreateAgent}
+                type="submit"
                 disabled={!newAgentData.name || !newAgentData.type || !newAgentData.description}
                 className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Create Agent
+                Create
               </button>
             </div>
           </div>

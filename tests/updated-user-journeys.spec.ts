@@ -9,8 +9,14 @@ const __dirname = path.dirname(__filename);
 // Extend timeout for comprehensive journey tests
 test.setTimeout(120_000);
 
-// Base URL for API calls
-const API_BASE = 'http://localhost:5000/api';
+// Base URL for API calls.
+// In PLAYWRIGHT_SKIP_WEBSERVER mode we call Python backend APIs directly.
+const skipFrontendProxy = process.env.PLAYWRIGHT_SKIP_WEBSERVER === '1';
+const DEFAULT_API_BASE = skipFrontendProxy ? 'http://localhost:8000' : 'http://localhost:5173/api';
+const API_BASE = process.env.PLAYWRIGHT_API_BASE || DEFAULT_API_BASE;
+const HEALTH_URL =
+  process.env.PLAYWRIGHT_HEALTH_URL ||
+  (skipFrontendProxy ? 'http://localhost:8000/health' : `${API_BASE.replace(/\/$/, '')}/health`);
 
 // Test users
 const REGULAR_USER = {
@@ -48,7 +54,7 @@ async function waitForBackendReady(request: any, timeoutMs = 120000) {
   while (Date.now() - start < timeoutMs) {
     attempts += 1;
     try {
-      const response = await request.get(`${API_BASE.replace(/\/$/, '')}/health`);
+      const response = await request.get(HEALTH_URL);
       lastStatus = response.status();
       const bodyText = await response.text().catch(() => '');
 
@@ -85,7 +91,13 @@ async function waitForBackendReady(request: any, timeoutMs = 120000) {
     await new Promise(resolve => setTimeout(resolve, 1500));
   }
 
-  throw new Error(`Backend health check timed out${lastStatus ? ` (last status ${lastStatus})` : ''}`);
+  const modeHint = skipFrontendProxy
+    ? 'PLAYWRIGHT_SKIP_WEBSERVER=1 is enabled. Keep backend running on :8000 or override PLAYWRIGHT_API_BASE and PLAYWRIGHT_HEALTH_URL.'
+    : 'Ensure frontend (:5173) and backend (:8000) are both running.';
+
+  throw new Error(
+    `Backend health check timed out${lastStatus ? ` (last status ${lastStatus})` : ''}. ${modeHint}`
+  );
 }
 
 // Helper: Register and login user
@@ -159,7 +171,7 @@ test.describe('Updated User Journeys - Authentication & Ownership', () => {
     const token = await setupUser(request, REGULAR_USER);
 
     // Step 2: Access dashboard (only if frontend server is running)
-    const skipFrontend = process.env.PLAYWRIGHT_SKIP_WEBSERVER === '1';
+    const skipFrontend = skipFrontendProxy;
     if (!skipFrontend) {
       await page.goto('/dashboard');
       await page.setExtraHTTPHeaders({

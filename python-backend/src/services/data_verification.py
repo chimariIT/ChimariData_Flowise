@@ -312,13 +312,75 @@ class DataVerificationService:
                 uniqueness_scores.append(unique_count / non_null_count)
         uniqueness = sum(uniqueness_scores) / len(uniqueness_scores) if uniqueness_scores else 1.0
 
-        # Validity: check for obvious validity issues
-        # (placeholder - would do actual validation based on column types)
-        validity = 0.95  # Default high, adjust based on actual checks
+        validity_scores: List[float] = []
+        consistency_scores: List[float] = []
 
-        # Consistency: check for consistent formats
-        # (placeholder - would check date formats, phone formats, etc.)
-        consistency = 0.90
+        for column in df.columns:
+            series = df[column].dropna()
+            if series.empty:
+                continue
+
+            # Numeric columns: valid when values are parseable and finite.
+            if pd.api.types.is_numeric_dtype(df[column]):
+                numeric = pd.to_numeric(series, errors="coerce")
+                parse_ratio = float(numeric.notna().mean()) if len(numeric) else 1.0
+                finite_ratio = float((~numeric.isin([float("inf"), float("-inf")])).mean()) if len(numeric) else 1.0
+                validity_scores.append((parse_ratio * 0.7) + (finite_ratio * 0.3))
+                consistency_scores.append(parse_ratio)
+                continue
+
+            text_series = series.astype(str).str.strip()
+            non_empty_ratio = float((text_series != "").mean()) if len(text_series) else 1.0
+            column_name = column.lower()
+
+            # Named-format validation for common business fields.
+            if "email" in column_name:
+                format_ratio = float(
+                    text_series.str.match(PII_PATTERNS["email"]["pattern"], case=False, na=False).mean()
+                )
+                validity_scores.append(format_ratio)
+                consistency_scores.append(format_ratio)
+                continue
+
+            if any(token in column_name for token in ("phone", "mobile", "cell")):
+                format_ratio = float(
+                    text_series.str.match(PII_PATTERNS["phone"]["pattern"], case=False, na=False).mean()
+                )
+                validity_scores.append(format_ratio)
+                consistency_scores.append(format_ratio)
+                continue
+
+            if any(token in column_name for token in ("zip", "postal")):
+                format_ratio = float(
+                    text_series.str.match(PII_PATTERNS["zip_code"]["pattern"], case=False, na=False).mean()
+                )
+                validity_scores.append(format_ratio)
+                consistency_scores.append(format_ratio)
+                continue
+
+            if any(token in column_name for token in ("date", "time", "dob", "birth")):
+                parsed_dt = pd.to_datetime(text_series, errors="coerce")
+                parse_ratio = float(parsed_dt.notna().mean()) if len(parsed_dt) else 1.0
+                validity_scores.append(parse_ratio)
+                consistency_scores.append(parse_ratio)
+                continue
+
+            # Generic validity for free-form columns.
+            numeric_like_ratio = float(
+                pd.to_numeric(text_series.str.replace(",", "", regex=False), errors="coerce").notna().mean()
+            ) if len(text_series) else 0.0
+            datetime_like_ratio = float(pd.to_datetime(text_series, errors="coerce").notna().mean()) if len(text_series) else 0.0
+            best_parse_ratio = max(numeric_like_ratio, datetime_like_ratio)
+
+            validity_scores.append(max(non_empty_ratio, best_parse_ratio))
+
+            # Consistency heuristic: reward dominant format regularity.
+            length_distribution = text_series.str.len().value_counts(normalize=True, dropna=True)
+            dominant_length_ratio = float(length_distribution.iloc[0]) if not length_distribution.empty else 1.0
+            consistency_scores.append((non_empty_ratio * 0.7) + (dominant_length_ratio * 0.3))
+
+        validity = sum(validity_scores) / len(validity_scores) if validity_scores else 1.0
+        consistency = sum(consistency_scores) / len(consistency_scores) if consistency_scores else 1.0
 
         # Overall score (weighted average)
         overall_score = (
@@ -352,12 +414,12 @@ class DataVerificationService:
             for pii in pii_fields:
                 if pii.confidence > 0.8:
                     issues.append(
-                        f"High-confidence PII detected in column '{pii}': "
+                        f"High-confidence PII detected in column '{pii.column}': "
                         f"{pii.type} ({pii.confidence:.0%} confidence)"
                     )
                 else:
                     warnings.append(
-                        f"Possible PII in column '{pii}': "
+                        f"Possible PII in column '{pii.column}': "
                         f"{pii.type} ({pii.confidence:.0%} confidence)"
                     )
 

@@ -6,9 +6,10 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Load default env, then overlay Playwright-specific overrides if present
+// Load default env, then load Playwright-specific defaults without overriding
+// explicitly provided shell env vars (for local/CI control of skipWebServer).
 dotenv.config({ path: path.resolve(__dirname, '.env') });
-dotenv.config({ path: path.resolve(__dirname, '.env.playwright'), override: true });
+dotenv.config({ path: path.resolve(__dirname, '.env.playwright') });
 
 const skipWebServer = process.env.PLAYWRIGHT_SKIP_WEBSERVER === '1';
 console.log(

@@ -54,10 +54,52 @@ interface UserRoleContextType {
 
 const UserRoleContext = createContext<UserRoleContextType | undefined>(undefined);
 
+const buildDefaultPermissions = (): UserPermissions => ({
+  id: 'default-permissions',
+  userId: '',
+  canAccessNonTechJourney: true,
+  canAccessBusinessJourney: true,
+  canAccessTechnicalJourney: true,
+  canRequestConsultation: true,
+  canAccessAdvancedAnalytics: true,
+  canUseCustomAiKeys: true,
+  canGenerateCode: true,
+  canAccessRawData: true,
+  canExportResults: true,
+  maxConcurrentProjects: 10,
+  maxDatasetSizeMB: 100,
+  maxAiQueriesPerMonth: 500,
+  maxVisualizationsPerProject: 100,
+  allowedAiProviders: ["google", "openai", "anthropic"],
+  canUseAdvancedModels: true,
+});
+
+const buildFallbackRoleData = (user: any): UserRoleData => {
+  const userRole = (user?.userRole || "non-tech") as UserRole;
+  return {
+    userRole,
+    technicalLevel: (user?.technicalLevel || "beginner") as TechnicalLevel,
+    subscriptionTier: (user?.subscriptionTier || "trial") as SubscriptionTier,
+    industry: user?.industry,
+    preferredJourney: user?.preferredJourney,
+    onboardingCompleted: Boolean(user?.onboardingCompleted),
+    permissions: {
+      ...buildDefaultPermissions(),
+      userId: user?.id || '',
+    },
+    currentUsage: {
+      monthlyUploads: Number(user?.monthlyUploads || 0),
+      monthlyDataVolume: Number(user?.monthlyDataVolume || 0),
+      monthlyAIInsights: Number(user?.monthlyAIInsights || 0),
+    },
+  };
+};
+
 export function UserRoleProvider({ children }: { children: ReactNode }) {
   const [userRoleData, setUserRoleData] = useState<UserRoleData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const usePythonBackend = (import.meta as any)?.env?.VITE_USE_PYTHON_BACKEND === 'true';
 
   const fetchUserRole = async () => {
     try {
@@ -73,9 +115,22 @@ export function UserRoleProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      // apiClient.get() returns parsed JSON directly, not a Response object
-      const data = await apiClient.get("/api/user/role-permissions");
-      setUserRoleData(data);
+      // Prefer richer role endpoint for Node backend, but skip it in Python mode to avoid noisy 404s.
+      if (!usePythonBackend) {
+        const rolePayload = await apiClient.get("/api/user/role-permissions", { treat404AsNull: true });
+        if (rolePayload && rolePayload.userRole) {
+          setUserRoleData(rolePayload);
+          return;
+        }
+      }
+
+      const authPayload = await apiClient.get("/api/auth/user", { treat404AsNull: true });
+      const authUser = authPayload?.user || authPayload?.data?.user || authPayload;
+      if (authUser && typeof authUser === 'object') {
+        setUserRoleData(buildFallbackRoleData(authUser));
+      } else {
+        setUserRoleData(null);
+      }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Unknown error";
 
@@ -100,7 +155,7 @@ export function UserRoleProvider({ children }: { children: ReactNode }) {
         technicalLevel,
       });
 
-      if (response.ok) {
+      if (response?.success || response?.ok) {
         await fetchUserRole(); // Refresh data after update
       } else {
         throw new Error("Failed to update user role");

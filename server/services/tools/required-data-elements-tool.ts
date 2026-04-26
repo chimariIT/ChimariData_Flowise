@@ -19,6 +19,12 @@ import { sourceColumnMapper } from '../source-column-mapper';
 import { embeddingService, type EmbeddingResult } from '../embedding-service';
 import { businessDefinitionRegistry } from '../business-definition-registry';
 import { TransformationCompilerPhase2 } from '../transformation-compiler-phase2';
+import {
+    buildContextLingoRulesFromDefinitions,
+    buildRecursiveQuestionLayers,
+    evaluateQuestionAnswerability,
+    type ContextLingoDefinition,
+} from '../question-grounding-gate';
 
 /**
  * Required data element specification
@@ -484,6 +490,40 @@ export interface DataRequirementsMappingDocument {
             artifactType: 'visualization' | 'model' | 'report' | 'dashboard' | 'metric';
             description: string;
         }>;
+        decomposition?: {
+            strategy: string;
+            layerCount: number;
+            leafCount: number;
+            layers: Array<{
+                id: string;
+                parentId: string | null;
+                depth: number;
+                text: string;
+                expansionType: string;
+                rule?: string;
+                metricHint?: string;
+                dimensionHint?: string;
+                children: string[];
+            }>;
+            leafMappings: Array<{
+                leafId: string;
+                leafText: string;
+                depth: number;
+                expansionType: string;
+                rule?: string;
+                metricHint?: string;
+                dimensionHint?: string;
+                matchedElementIds: string[];
+                topMatchElement?: string;
+                topMatchScore: number;
+            }>;
+            reconstruction: {
+                highLevelQuestion: string;
+                method: string;
+            };
+        };
+        answerability?: 'answerable' | 'partial' | 'data_gap';
+        answerabilityBlockers?: string[];
     }>;
 
     // Phase 1C: Structured question intents from QuestionIntentAnalyzer
@@ -953,7 +993,8 @@ export class RequiredDataElementsTool {
             normalizedQuestions,
             analysisPath,
             requiredDataElements,
-            input.projectId
+            input.projectId,
+            resolvedIndustry
         );
 
         const document: DataRequirementsMappingDocument = {
@@ -3970,7 +4011,8 @@ assert df['${element.sourceField}'].nunique() == len(df), "Field must have uniqu
         userQuestions: string[],
         analysisPath: AnalysisPath[],
         requiredDataElements: RequiredDataElement[],
-        projectId?: string
+        projectId?: string,
+        industryContext?: string
     ): Promise<Array<{
         questionId: string;
         questionText: string;
@@ -3981,6 +4023,40 @@ assert df['${element.sourceField}'].nunique() == len(df), "Field must have uniqu
             artifactType: 'visualization' | 'model' | 'report' | 'dashboard' | 'metric';
             description: string;
         }>;
+        decomposition?: {
+            strategy: string;
+            layerCount: number;
+            leafCount: number;
+            layers: Array<{
+                id: string;
+                parentId: string | null;
+                depth: number;
+                text: string;
+                expansionType: string;
+                rule?: string;
+                metricHint?: string;
+                dimensionHint?: string;
+                children: string[];
+            }>;
+            leafMappings: Array<{
+                leafId: string;
+                leafText: string;
+                depth: number;
+                expansionType: string;
+                rule?: string;
+                metricHint?: string;
+                dimensionHint?: string;
+                matchedElementIds: string[];
+                topMatchElement?: string;
+                topMatchScore: number;
+            }>;
+            reconstruction: {
+                highLevelQuestion: string;
+                method: string;
+            };
+        };
+        answerability?: 'answerable' | 'partial' | 'data_gap';
+        answerabilityBlockers?: string[];
     }>> {
         const mapping: Array<any> = [];
 
@@ -4015,6 +4091,7 @@ assert df['${element.sourceField}'].nunique() == len(df), "Field must have uniqu
         // Phase 1: Load business definitions for synonym/industry matching
         console.log('🏭 [Phase 1] Loading business definitions for semantic matching...');
         const businessContextMap = new Map<string, any>();
+        const contextLingoDefinitions: ContextLingoDefinition[] = [];
         try {
             for (const el of requiredDataElements) {
                 if (!el.elementName) continue;
@@ -4030,12 +4107,47 @@ assert df['${element.sourceField}'].nunique() == len(df), "Field must have uniqu
 
                 if (lookupResult.found && lookupResult.definition) {
                     businessContextMap.set(el.elementName, lookupResult.definition);
+                    const definition = lookupResult.definition;
+                    const metricHint = String(el.elementName || '').trim() || undefined;
+                    const businessDescription = String(definition?.businessDescription || '').trim();
+
+                    const industryTerms = Array.isArray(definition?.industryTerms) ? definition.industryTerms : [];
+                    for (const term of industryTerms) {
+                        if (typeof term !== 'string' || term.trim().length < 3) continue;
+                        contextLingoDefinitions.push({
+                            term: term.trim(),
+                            definition: businessDescription,
+                            metricHint,
+                        });
+                    }
+
+                    const synonyms = Array.isArray(definition?.synonyms) ? definition.synonyms : [];
+                    for (const synonym of synonyms) {
+                        if (typeof synonym !== 'string' || synonym.trim().length < 3) continue;
+                        contextLingoDefinitions.push({
+                            term: synonym.trim(),
+                            definition: businessDescription,
+                            metricHint,
+                        });
+                    }
                 }
             }
             console.log(`✅ [Phase 1] Loaded ${businessContextMap.size} business definitions`);
         } catch (bizErr) {
             console.warn(`⚠️ [Phase 1] Business definition loading failed:`, bizErr);
             // Continue without business context
+        }
+
+        const contextLingoRules = buildContextLingoRulesFromDefinitions(contextLingoDefinitions);
+        if (contextLingoRules.length > 0) {
+            console.log(`🧠 [Phase 1] Recursive lingo rules available: ${contextLingoRules.length}`);
+        }
+
+        const requiredElementLookup = new Map<string, RequiredDataElement>();
+        for (const element of requiredDataElements) {
+            if (element.elementId) {
+                requiredElementLookup.set(element.elementId, element);
+            }
         }
 
         for (let idx = 0; idx < userQuestions.length; idx++) {
@@ -4046,77 +4158,159 @@ assert df['${element.sourceField}'].nunique() == len(df), "Field must have uniqu
                 ? generateStableQuestionId(projectId, question)
                 : `q_txt_${crypto.createHash('sha256').update(question.toLowerCase().trim()).digest('hex').substring(0, 8)}`;
 
-            // Phase 1: Enhanced element matching with semantic scoring
-            console.log(`\n   [Phase 1] Scoring elements for question: "${question.substring(0, 60)}..."`);
-            const questionEmbedding = questionEmbeddings.get(question) || null;
+            console.log(`\n   [Phase 1] Recursive scoring for question: "${question.substring(0, 60)}..."`);
 
-            const elementScores = await Promise.all(
-                requiredDataElements.map(async el => {
-                    const scored = await scoreElementMatchPhase1(
-                        question,
+            const decomposition = buildRecursiveQuestionLayers(question, {
+                maxDepth: 3,
+                maxNodes: 24,
+                contextRules: contextLingoRules,
+            });
+            const leafNodes = decomposition.leafNodes.length > 0
+                ? decomposition.leafNodes
+                : decomposition.layers.slice(0, 1);
+
+            const elementScoreById = new Map<string, { score: number; element: RequiredDataElement }>();
+            const leafMappings: Array<{
+                leafId: string;
+                leafText: string;
+                depth: number;
+                expansionType: string;
+                rule?: string;
+                metricHint?: string;
+                dimensionHint?: string;
+                matchedElementIds: string[];
+                topMatchElement?: string;
+                topMatchScore: number;
+            }> = [];
+
+            for (const leaf of leafNodes) {
+                let leafEmbedding = questionEmbeddings.get(leaf.text) || null;
+                if (!leafEmbedding) {
+                    try {
+                        const embedded = await embeddingService.embedText(leaf.text, { truncateLength: 500 });
+                        questionEmbeddings.set(leaf.text, embedded);
+                        leafEmbedding = embedded;
+                    } catch (leafEmbedErr) {
+                        leafEmbedding = null;
+                        console.warn(`   ⚠️ Leaf embedding unavailable for "${leaf.text.substring(0, 40)}...":`, leafEmbedErr);
+                    }
+                }
+
+                const leafScores = await Promise.all(
+                    requiredDataElements.map(async element => scoreElementMatchPhase1(
+                        leaf.text,
                         questionId,
-                        el,
-                        questionEmbedding,
+                        element,
+                        leafEmbedding,
                         businessContextMap,
                         industryContext
-                    );
-                    return scored;
-                })
-            );
+                    ))
+                );
 
-            // Sort by score (highest first), filter by threshold
-            const MIN_ELEMENT_SCORE = 0.4; // Phase 1: Lower threshold for semantic matching
-            const relatedElements = elementScores
-                .filter(s => s.score >= MIN_ELEMENT_SCORE)
-                .sort((a, b) => b.score - a.score);
+                const relatedLeafElements = leafScores
+                    .filter(score => score.score >= 0.4)
+                    .sort((left, right) => right.score - left.score);
 
-            if (relatedElements.length === 0) {
-                console.warn(`⚠️ [Phase 1] No elements above threshold for question: "${question}"`);
-                continue;
+                for (const related of relatedLeafElements) {
+                    const elementId = String(related.element.elementId || '').trim();
+                    if (!elementId) continue;
+                    const current = elementScoreById.get(elementId);
+                    if (!current || related.score > current.score) {
+                        elementScoreById.set(elementId, {
+                            score: related.score,
+                            element: related.element,
+                        });
+                    }
+                }
+
+                leafMappings.push({
+                    leafId: leaf.id,
+                    leafText: leaf.text,
+                    depth: leaf.depth,
+                    expansionType: leaf.expansionType,
+                    rule: leaf.rule,
+                    metricHint: leaf.metricHint,
+                    dimensionHint: leaf.dimensionHint,
+                    matchedElementIds: relatedLeafElements.map(item => item.element.elementId),
+                    topMatchElement: relatedLeafElements[0]?.element.elementName,
+                    topMatchScore: Number(relatedLeafElements[0]?.score || 0),
+                });
             }
 
-            // Log top match details
-            const topMatch = relatedElements[0];
-            console.log(`   ✓ Found ${relatedElements.length} related elements`);
-            console.log(`   ✓ Top match: "${topMatch.element.elementName || topMatch.element.name}" (score=${topMatch.score.toFixed(2)}, layer=${topMatch.matchLayer})`);
-            if (topMatch.matchReasons.length > 0) {
-                console.log(`   ✓ Match reasons: ${topMatch.matchReasons.join(', ')}`);
-            }
+            const relatedElements = Array.from(elementScoreById.values())
+                .sort((left, right) => right.score - left.score)
+                .map(entry => entry.element);
 
-            // Find analyses that can answer this question
+            const questionContexts = [question, ...leafMappings.map(leaf => leaf.leafText)];
             const relatedAnalyses = analysisPath.filter(analysis => {
-                const questionLower = question.toLowerCase();
-                const analysisLower = analysis.description.toLowerCase();
-                return questionLower.split(' ').some(word =>
-                    word.length > 3 && analysisLower.includes(word)
+                const analysisText = `${analysis.analysisName} ${analysis.description} ${(analysis.techniques || []).join(' ')}`.toLowerCase();
+                return questionContexts.some(context =>
+                    context.toLowerCase().split(/\s+/).some(word => word.length > 3 && analysisText.includes(word))
                 );
             });
 
-            // Find elements that need transformation
-            const elementsNeedingTransform = relatedElements
-                .filter(el => el.transformationRequired)
-                .map(el => el.elementId);
+            const recommendedAnalyses = relatedAnalyses.map(analysis => analysis.analysisId);
+            if (recommendedAnalyses.length === 0) {
+                const descriptiveFallback = analysisPath.find(analysis =>
+                    /descriptive|summary|exploratory/.test(`${analysis.analysisType} ${analysis.analysisName}`.toLowerCase())
+                );
+                if (descriptiveFallback) {
+                    recommendedAnalyses.push(descriptiveFallback.analysisId);
+                }
+            }
 
-            // Aggregate expected artifacts from related analyses
-            const expectedArtifacts: Array<any> = [];
-            relatedAnalyses.forEach(analysis => {
-                analysis.expectedArtifacts.forEach(artifact => {
-                    if (!expectedArtifacts.find(a => a.artifactType === artifact.artifactType)) {
+            const elementsNeedingTransform = relatedElements
+                .filter(element => element.transformationRequired)
+                .map(element => element.elementId);
+
+            const expectedArtifacts: Array<{ artifactType: string; description: string }> = [];
+            for (const analysis of relatedAnalyses) {
+                for (const artifact of analysis.expectedArtifacts) {
+                    if (!expectedArtifacts.find(item => item.artifactType === artifact.artifactType)) {
                         expectedArtifacts.push(artifact);
                     }
-                });
-            });
+                }
+            }
+
+            const answerabilityResult = evaluateQuestionAnswerability(
+                question,
+                relatedElements.map(element => element.elementId),
+                requiredElementLookup as any
+            );
+            const answerabilityBlockers = Array.from(new Set(answerabilityResult.blockers.map(item => String(item))));
+
+            console.log(
+                `[requirements.qmap] projectId=${projectId || 'n/a'} questionId=${questionId} answerability=${answerabilityResult.answerability} leaves=${decomposition.leafCount} requiredElements=${relatedElements.length} blockers=[${answerabilityBlockers.join(', ')}]`
+            );
+            if (answerabilityResult.answerability === 'data_gap') {
+                console.warn(
+                    `[requirements.qmap.data_gap] questionId=${questionId} question="${question}" blockers=[${answerabilityBlockers.join(', ')}]`
+                );
+            }
 
             mapping.push({
                 questionId,
                 questionText: question,
-                requiredDataElements: relatedElements.map(el => el.elementId),
-                recommendedAnalyses: relatedAnalyses.map(a => a.analysisId),
+                requiredDataElements: relatedElements.map(element => element.elementId),
+                recommendedAnalyses,
                 transformationsNeeded: elementsNeedingTransform,
-                expectedArtifacts: expectedArtifacts.length > 0 ? expectedArtifacts : [
+                expectedArtifacts: expectedArtifacts.length > 0 ? expectedArtifacts as any : [
                     { artifactType: 'visualization', description: 'Charts and graphs' },
                     { artifactType: 'report', description: 'Analysis report' }
-                ]
+                ],
+                decomposition: {
+                    strategy: 'recursive_lingo_and_multi_part',
+                    layerCount: decomposition.layerCount,
+                    leafCount: decomposition.leafCount,
+                    layers: decomposition.layers,
+                    leafMappings,
+                    reconstruction: {
+                        highLevelQuestion: question,
+                        method: 'mapped granular leaves -> recomposed business question intent',
+                    },
+                },
+                answerability: answerabilityResult.answerability,
+                answerabilityBlockers,
             });
         }
 

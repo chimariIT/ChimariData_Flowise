@@ -18,6 +18,7 @@
 
 The Chimaridata Python Backend provides a comprehensive data science platform with:
 - **Agentic Orchestration**: LangGraph-based multi-agent coordination
+- **Deep Agent Runtime**: Optional LangChain DeepAgent delegation across specialist roles
 - **RAG Evidence Chain**: Semantic linking of questions → elements → insights → answers
 - **Semantic Matching**: Vector-based question-to-element mapping
 - **Transformation Engine**: Business-aware data transformations with dependency resolution
@@ -31,6 +32,8 @@ The Chimaridata Python Backend provides a comprehensive data science platform wi
 ## Features
 
 ### 1. Agentic Workflow Orchestration
+
+DeepAgent can be enabled with `ENABLE_DEEPAGENT=true` to let orchestration tasks delegate recursively to specialist subagents while preserving tool permissions.
 
 Multi-agent system with specialized agents:
 - **Project Manager**: Coordinates end-to-end workflow

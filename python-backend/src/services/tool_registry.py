@@ -15,6 +15,9 @@ Features:
 from typing import Dict, List, Any, Optional
 from logging import getLogger
 from datetime import datetime
+import os
+import subprocess
+import tempfile
 
 # LangChain imports
 from langchain_core.tools import tool
@@ -652,7 +655,7 @@ def search_web(query: str) -> str:
     """
     Search the web for industry patterns, benchmarks, and best practices.
 
-    NOTE: This is a placeholder. Implement with actual web search API.
+    Requires a configured external search provider.
 
     Args:
         query: Search query
@@ -660,8 +663,48 @@ def search_web(query: str) -> str:
     Returns:
         Search results
     """
-    # Placeholder implementation
-    return f"Search results for: {query}"
+    provider = os.getenv("WEB_SEARCH_PROVIDER", "").strip().lower()
+    if provider != "serper":
+        return (
+            "Web search is not configured. "
+            "Set WEB_SEARCH_PROVIDER=serper and WEB_SEARCH_API_KEY to enable external search."
+        )
+
+    api_key = os.getenv("WEB_SEARCH_API_KEY", "").strip()
+    if not api_key:
+        return "WEB_SEARCH_API_KEY is missing. No external search results were returned."
+
+    try:
+        import requests  # Imported lazily to keep startup light
+
+        response = requests.post(
+            "https://google.serper.dev/search",
+            headers={
+                "X-API-KEY": api_key,
+                "Content-Type": "application/json",
+            },
+            json={"q": query, "num": 5},
+            timeout=20,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        organic = payload.get("organic", []) if isinstance(payload, dict) else []
+        if not organic:
+            return "No search results returned by provider."
+
+        lines: List[str] = []
+        for item in organic[:5]:
+            title = str(item.get("title", "")).strip()
+            link = str(item.get("link", "")).strip()
+            snippet = str(item.get("snippet", "")).strip()
+            if not title and not link:
+                continue
+            lines.append(f"- {title} ({link}) {snippet}".strip())
+
+        return "\n".join(lines) if lines else "No parsable search results returned by provider."
+    except Exception as e:
+        logger.error(f"search_web failed: {e}", exc_info=True)
+        return f"Web search failed: {e}"
 
 
 @tool
@@ -669,7 +712,7 @@ def execute_python(code: str) -> str:
     """
     Execute Python code for data transformations and calculations.
 
-    WARNING: This uses exec() which is unsafe. Use in sandboxed environment only.
+    Disabled by default. Enable explicitly via ENABLE_UNSAFE_PYTHON_TOOL=true.
 
     Args:
         code: Python code to execute
@@ -677,13 +720,38 @@ def execute_python(code: str) -> str:
     Returns:
         Execution result
     """
-    # Placeholder implementation - DO NOT use exec() in production without sandboxing
+    if os.getenv("ENABLE_UNSAFE_PYTHON_TOOL", "false").lower() != "true":
+        return (
+            "Python execution tool is disabled. "
+            "Set ENABLE_UNSAFE_PYTHON_TOOL=true to allow execution in controlled environments."
+        )
+
     try:
-        # In production, use a proper sandboxed Python REPL
-        result = f"Executed: {code[:50]}..."
-        return result
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as tmp_file:
+            tmp_file.write(code)
+            script_path = tmp_file.name
+
+        completed = subprocess.run(
+            ["python", script_path],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        stdout = (completed.stdout or "").strip()
+        stderr = (completed.stderr or "").strip()
+        if completed.returncode != 0:
+            return f"Python execution failed (exit {completed.returncode}): {stderr or 'no stderr output'}"
+        return stdout if stdout else "Python executed successfully with no stdout output."
     except Exception as e:
-        return f"Error: {str(e)}"
+        logger.error(f"execute_python failed: {e}", exc_info=True)
+        return f"Python execution failed: {e}"
+    finally:
+        try:
+            if "script_path" in locals() and script_path and os.path.exists(script_path):
+                os.remove(script_path)
+        except Exception:
+            pass
 
 
 # ============================================================================

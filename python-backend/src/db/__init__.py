@@ -30,6 +30,19 @@ _engine = None
 _async_session_maker = None
 
 
+def normalize_async_database_url(database_url: str) -> str:
+    """Return a SQLAlchemy async PostgreSQL URL for common DATABASE_URL formats."""
+    if database_url.startswith("postgresql+asyncpg://"):
+        return database_url
+    if database_url.startswith("postgresql+psycopg2://"):
+        return database_url.replace("postgresql+psycopg2://", "postgresql+asyncpg://", 1)
+    if database_url.startswith("postgresql://"):
+        return database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    if database_url.startswith("postgres://"):
+        return database_url.replace("postgres://", "postgresql+asyncpg://", 1)
+    return database_url
+
+
 def init_database(database_url: str, pool_size: int = 5, max_overflow: int = 10) -> None:
     """
     Initialize the database engine and session maker.
@@ -46,6 +59,8 @@ def init_database(database_url: str, pool_size: int = 5, max_overflow: int = 10)
     if _engine is not None:
         logger.warning("Database already initialized, skipping")
         return
+
+    database_url = normalize_async_database_url(database_url)
 
     # Configure engine with connection pooling
     engine_kwargs = {

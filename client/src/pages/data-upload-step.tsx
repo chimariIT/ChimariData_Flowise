@@ -22,6 +22,7 @@ import { DatabaseConnectorTab } from "@/components/DatabaseConnectorTab";
 import { APIConnectorTab } from "@/components/APIConnectorTab";
 import {
   Database,
+  Target,
   Upload,
   CheckCircle,
   AlertCircle,
@@ -87,6 +88,38 @@ const columnMatchesExclusion = (columnName: string, columnsList: string[]): bool
   });
 };
 
+const IDENTIFIER_COLUMN_PATTERN = /(^id$|(^|[_\s-])(record|employee|user|customer|client|account|order|invoice|project|team|leader|manager|person|member|staff|org|organization|case|session|transaction|event|row)[_\s-]?id$|identifier$|uuid$|[_\s-]id$)/i;
+
+const isProtectedIdentifierColumn = (columnName: string): boolean => {
+  const normalized = (columnName || '').trim().toLowerCase();
+  if (!normalized) return false;
+  return IDENTIFIER_COLUMN_PATTERN.test(normalized);
+};
+
+type JourneyTechnicalLevel = 'basic' | 'business' | 'technical';
+
+const TECHNICAL_LEVEL_TO_AUDIENCE: Record<JourneyTechnicalLevel, string> = {
+  basic: 'ceo',
+  business: 'business_manager',
+  technical: 'data_analyst',
+};
+
+const audienceToTechnicalLevel = (audience?: string): JourneyTechnicalLevel => {
+  switch ((audience || '').toLowerCase()) {
+    case 'data_analyst':
+    case 'data_scientist':
+    case 'engineer':
+      return 'technical';
+    case 'business_manager':
+    case 'vp':
+    case 'director':
+      return 'business';
+    case 'ceo':
+    default:
+      return 'basic';
+  }
+};
+
 export default function DataUploadStep({ journeyType, onNext, onPrevious, renderAsContent = false }: DataUploadStepProps) {
   const { toast } = useToast();
   const normalizedJourneyType = normalizeSessionJourney(journeyType);
@@ -95,6 +128,12 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
   // Project metadata state (from project-setup-step)
   const [projectName, setProjectName] = useState("");
   const [projectDescription, setProjectDescription] = useState("");
+  const [analysisGoal, setAnalysisGoal] = useState("");
+  const [businessQuestions, setBusinessQuestions] = useState("");
+  const [industry, setIndustry] = useState("general");
+  const [technicalLevel, setTechnicalLevel] = useState<JourneyTechnicalLevel>(() =>
+    normalizedJourneyType === 'technical' ? 'technical' : normalizedJourneyType === 'business' ? 'business' : 'basic'
+  );
 
   // Upload state
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -456,6 +495,25 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
           if (projectData.description && !projectDescription) {
             setProjectDescription(projectData.description);
           }
+          const progress = (projectData.journeyProgress || {}) as any;
+          if (progress.analysisGoal && !analysisGoal) {
+            setAnalysisGoal(progress.analysisGoal);
+          }
+          if (Array.isArray(progress.userQuestions) && progress.userQuestions.length > 0 && !businessQuestions) {
+            const combinedQuestions = progress.userQuestions
+              .map((q: any) => (typeof q?.text === 'string' ? q.text : ''))
+              .filter(Boolean)
+              .join('\n');
+            if (combinedQuestions) {
+              setBusinessQuestions(combinedQuestions);
+            }
+          }
+          if (typeof progress.industry === 'string' && progress.industry && industry === 'general') {
+            setIndustry(progress.industry);
+          }
+          if (progress.audience?.primary) {
+            setTechnicalLevel(audienceToTechnicalLevel(progress.audience.primary));
+          }
         }
       } catch (projectError) {
         console.error('Failed to load project for state restoration:', projectError);
@@ -465,7 +523,7 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
     } finally {
       setIsRefreshingPreview(false);
     }
-  }, [currentProjectId, projectName, projectDescription, journeyProgress]);
+  }, [currentProjectId, projectName, projectDescription, journeyProgress, analysisGoal, businessQuestions, industry]);
 
   // Initialize projectId from localStorage on mount
   // Clear project state when starting a new journey
@@ -477,6 +535,10 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
       setCurrentProjectId(null);
       setProjectName('');
       setProjectDescription('');
+      setAnalysisGoal('');
+      setBusinessQuestions('');
+      setIndustry('general');
+      setTechnicalLevel(normalizedJourneyType === 'technical' ? 'technical' : normalizedJourneyType === 'business' ? 'business' : 'basic');
       setUploadStatus('idle');
       setUploadedFiles([]);
       setDataPreview({});
@@ -502,7 +564,7 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
       const cleanUrl = window.location.pathname;
       window.history.replaceState({}, '', cleanUrl);
     }
-  }, []);
+  }, [normalizedJourneyType]);
 
   useEffect(() => {
     // Only load saved project ID if not starting a new journey
@@ -550,7 +612,26 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
     if (journeyProgress.dataQualityApproved) {
       setDataQualityApproved(true);
     }
-  }, [journeyProgress, hasAllPiiDecisions, getExpectedPiiFileNames]);
+    if (journeyProgress.analysisGoal && !analysisGoal) {
+      setAnalysisGoal(journeyProgress.analysisGoal);
+    }
+    const progressQuestions = Array.isArray(journeyProgress.userQuestions) ? journeyProgress.userQuestions : [];
+    if (progressQuestions.length > 0 && !businessQuestions) {
+      const combinedQuestions = progressQuestions
+        .map((q: any) => (typeof q?.text === 'string' ? q.text : ''))
+        .filter(Boolean)
+        .join('\n');
+      if (combinedQuestions) {
+        setBusinessQuestions(combinedQuestions);
+      }
+    }
+    if (journeyProgress.industry && industry === 'general') {
+      setIndustry(journeyProgress.industry);
+    }
+    if (journeyProgress.audience?.primary) {
+      setTechnicalLevel(audienceToTechnicalLevel(journeyProgress.audience.primary));
+    }
+  }, [journeyProgress, hasAllPiiDecisions, getExpectedPiiFileNames, analysisGoal, businessQuestions, industry]);
 
   const getJourneyTypeInfo = () => {
     switch (journeyType) {
@@ -819,6 +900,21 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
       }
     }
 
+    const trimmedGoal = analysisGoal.trim();
+    if (!trimmedGoal) {
+      toast({
+        title: "Goal Required",
+        description: "Please describe what you want to learn from your data before continuing.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    const parsedQuestions = businessQuestions
+      .split('\n')
+      .map((question, index) => ({ id: `q_${index + 1}`, text: question.trim() }))
+      .filter((question) => question.text.length > 0);
+
     // Validate files uploaded - also check journeyProgress as fallback
     const effectiveFileIds = uploadedFileIds?.length > 0
       ? uploadedFileIds
@@ -849,8 +945,8 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
     const piiCompleted = allReviewed || legacyReviewed;
     if (!piiCompleted) {
       toast({
-        title: "PII Review Required",
-        description: "Please complete the PII review for all uploaded files before continuing.",
+        title: "Privacy Review Required",
+        description: "Please complete the privacy review for all uploaded files before continuing.",
         variant: "destructive"
       });
       return;
@@ -874,6 +970,13 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
         currentStep: 'prepare',
         completedSteps: [...(journeyProgress?.completedSteps || []), 'data'],
         uploadedDatasetIds: effectiveFileIds.length > 0 ? effectiveFileIds : uploadedFileIds,
+        analysisGoal: trimmedGoal,
+        userQuestions: parsedQuestions,
+        industry,
+        audience: {
+          ...(journeyProgress?.audience || {}),
+          primary: TECHNICAL_LEVEL_TO_AUDIENCE[technicalLevel],
+        },
         joinedData: {
           // Preserve fullData from backend (saved by GET /datasets endpoint)
           ...(journeyProgress?.joinedData || {}),
@@ -1294,10 +1397,14 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
     if (!currentPIIFile) return;
 
     const allPiiColumns = piiDetectionResult?.detectedPII?.map((p: any) => p.column) || [];
+    const protectedIdentifierColumns = allPiiColumns.filter((column: string) => isProtectedIdentifierColumn(column));
+    const selectedWithProtectedIdentifiers = [...new Set([...selectedColumns, ...protectedIdentifierColumns])];
     const columnsToExclude = requiresPII
-      ? allPiiColumns.filter((col: string) => !selectedColumns.includes(col))
-      : allPiiColumns;
-    const columnsToAnonymize = anonymizeData ? selectedColumns : [];
+      ? allPiiColumns.filter((col: string) => !selectedWithProtectedIdentifiers.includes(col))
+      : allPiiColumns.filter((col: string) => !protectedIdentifierColumns.includes(col));
+    const columnsToAnonymize = anonymizeData
+      ? selectedWithProtectedIdentifiers.filter((col: string) => !protectedIdentifierColumns.includes(col))
+      : [];
 
     // Store PII decision for this specific file
     const fileDecision = {
@@ -1336,14 +1443,14 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
         queryClient.invalidateQueries({ queryKey: ["project", currentProjectId] });
         await refreshProjectPreview();
         toast({
-          title: "PII Decision Saved",
-          description: `For ${currentPIIFile}: ${columnsToExclude.length} column(s) excluded, ${columnsToAnonymize.length} column(s) anonymized`,
+          title: "Privacy Choices Saved",
+          description: `For ${currentPIIFile}: ${columnsToExclude.length} field(s) excluded, ${columnsToAnonymize.length} field(s) masked${protectedIdentifierColumns.length ? `, ${protectedIdentifierColumns.length} record identifier(s) retained` : ''}`,
         });
       } catch (piiError) {
         console.error('Server-side PII exclusion failed:', piiError);
         toast({
-          title: "PII Processing Issue",
-          description: "Some PII columns may still be visible. They will be filtered in the verification step.",
+          title: "Privacy Processing Issue",
+          description: "Some privacy fields may still be visible. They will be filtered in the verification step.",
           variant: "destructive"
         });
       }
@@ -1447,6 +1554,73 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
           </CardContent>
         </Card>
       )}
+
+      {/* Goals & Questions */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Target className="w-5 h-5" />
+            What Do You Want To Learn From Your Data?
+          </CardTitle>
+          <CardDescription>
+            Describe your goal in plain language. Keep it short and specific so we can tailor the analysis.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="analysisGoal">Analysis Goal *</Label>
+            <Textarea
+              id="analysisGoal"
+              value={analysisGoal}
+              onChange={(e) => setAnalysisGoal(e.target.value)}
+              placeholder="For example: I want to understand employee turnover drivers and identify at-risk teams."
+              rows={4}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="businessQuestions">Key Questions (Optional)</Label>
+            <Textarea
+              id="businessQuestions"
+              value={businessQuestions}
+              onChange={(e) => setBusinessQuestions(e.target.value)}
+              placeholder="One question per line. Example: Which teams have the highest attrition risk?"
+              rows={3}
+            />
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="goalIndustry">Industry (Optional)</Label>
+              <select
+                id="goalIndustry"
+                value={industry}
+                onChange={(e) => setIndustry(e.target.value)}
+                className="w-full h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
+              >
+                <option value="general">General</option>
+                <option value="retail">Retail</option>
+                <option value="healthcare">Healthcare</option>
+                <option value="finance">Finance</option>
+                <option value="manufacturing">Manufacturing</option>
+                <option value="education">Education</option>
+                <option value="technology">Technology</option>
+              </select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="technicalLevel">Technical Level</Label>
+              <select
+                id="technicalLevel"
+                value={technicalLevel}
+                onChange={(e) => setTechnicalLevel(e.target.value as JourneyTechnicalLevel)}
+                className="w-full h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
+              >
+                <option value="basic">Basic - I need guidance</option>
+                <option value="business">Business - executive summary focus</option>
+                <option value="technical">Technical - detailed analysis</option>
+              </select>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Data Source Selection */}
       <Card>
@@ -1642,23 +1816,17 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
         <PIIDetectionDialog
           isOpen={showPIIDialog}
           onClose={() => {
-            // If user closes without decision, mark as no PII for this file
+            // If user closes without selecting, apply the safe default:
+            // exclude privacy fields (while retaining identifier fields).
             if (currentPIIFile) {
-              setPiiDecisionsByFile(prev => ({
-                ...prev,
-                [currentPIIFile]: {
-                  excludedColumns: [],
-                  anonymizedColumns: [],
-                  decisionTimestamp: new Date().toISOString()
-                }
-              }));
-              setPiiQueue(prev => prev.filter(item => item.fileName !== currentPIIFile));
-              setCurrentPIIFile(null);
+              void handlePIIDecision(false, false, []);
+              return;
             }
             setShowPIIDialog(false);
           }}
           onDecision={handlePIIDecision}
           projectId={currentProjectId}
+          onToolkitApplied={refreshProjectPreview}
           fileName={currentPIIFile}
           piiResult={piiDetectionResult}
         />
@@ -1704,7 +1872,7 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
 
             {joinedPreviewColumns.length === 0 ? (
               <p className="text-sm text-gray-600 p-4 border rounded-lg bg-white">
-                No columns available after PII filtering. Adjust excluded fields to inspect the merged sample.
+                No columns available after privacy filtering. Adjust excluded fields to inspect the merged sample.
               </p>
             ) : (
               <div>
@@ -1756,7 +1924,7 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
               Sample Data Preview
             </CardTitle>
             <CardDescription>
-              Showing first 10 rows for each uploaded file (post-PII decisions)
+              Showing first 10 rows for each uploaded file (after privacy choices)
               {isRefreshingPreview && ' • refreshing...'}
             </CardDescription>
           </CardHeader>
@@ -1781,7 +1949,7 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
                       </div>
                     </div>
                     {visibleColumns.length === 0 ? (
-                      <p className="text-sm text-gray-600 p-4 border rounded-lg">No columns available after PII filtering.</p>
+                      <p className="text-sm text-gray-600 p-4 border rounded-lg">No columns available after privacy filtering.</p>
                     ) : (
                       <ScrollArea className="border rounded-lg h-96 w-full">
                         <div className="w-max min-w-full">
@@ -1848,7 +2016,7 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
                     </div>
                     <div className="flex items-center gap-2">
                       <CheckCircle className="w-4 h-4 text-green-600" />
-                      <span>PII review: Completed</span>
+                      <span>Privacy review: Completed</span>
                     </div>
                   </div>
                 </div>
@@ -1910,7 +2078,7 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
               return !validatedFileNames.every(name => decisionKeys.has(name));
             })()}
           >
-            {isUpdating ? 'Saving...' : piiQueue.length > 0 ? 'PII Review In Progress...' : 'Continue to Analysis Preparation'}
+            {isUpdating ? 'Saving...' : piiQueue.length > 0 ? 'Privacy Review In Progress...' : 'Continue to Analysis Preparation'}
             <ArrowRight className="w-4 h-4 ml-2" />
           </Button>
         </div>
@@ -1925,17 +2093,6 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
         onOpenChange={setShowRecommendationDialog}
       />
 
-      {/* PII Detection Dialog (duplicate for safety) */}
-      {piiDetectionResult && (
-        <PIIDetectionDialog
-          isOpen={showPIIDialog}
-          onClose={() => setShowPIIDialog(false)}
-          onDecision={handlePIIDecision}
-          projectId={currentProjectId}
-          onToolkitApplied={refreshProjectPreview}
-          piiResult={piiDetectionResult}
-        />
-      )}
     </div>
   );
 

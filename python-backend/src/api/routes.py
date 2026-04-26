@@ -11,23 +11,16 @@ Provides REST API endpoints for:
 
 from typing import List, Optional, Dict, Any
 from datetime import datetime
-from uuid import uuid4
-import uuid
 import logging
 
-from fastapi import APIRouter, HTTPException, Depends, Query, status, UploadFile
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
-
-# LangChain imports
-from langchain_openai import ChatOpenAI
 
 # Local imports
 from ..models.schemas import (
-    DatasetCreate, Dataset, AnalysisRequest, AnalysisResult,
     EvidenceChainQuery, EvidenceChainResponse, APIResponse,
-    OrchestratorState, JourneyStep, JourneyState,
-    QuestionElementMapping, TransformationPlan, TransformationResult,
-    HealthStatus, AnalysisType
+    JourneyStep, TransformationPlan, TransformationResult,
+    HealthStatus, AnalysisType, AgentType
 )
 from ..services.agent_orchestrator import get_orchestrator
 from ..services.semantic_matching import (
@@ -66,6 +59,13 @@ class CreateSessionRequest(BaseModel):
 class SessionAdvanceRequest(BaseModel):
     """Request to advance a session"""
     user_input: Optional[Dict[str, Any]] = Field(None, description="User input for the step")
+
+
+class RunAgentTaskRequest(BaseModel):
+    """Request to run an explicit agent task through orchestrator runtime."""
+    agent_type: str = Field(..., description="Agent type enum value")
+    task: str = Field(..., min_length=1, description="Task instruction for the agent")
+    context: Optional[Dict[str, Any]] = Field(None, description="Structured context payload")
 
 
 class GenerateEmbeddingsRequest(BaseModel):
@@ -227,6 +227,46 @@ async def get_workflow_graph():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@orchestrator_router.post("/agent/run", response_model=APIResponse)
+async def run_agent_task(request: RunAgentTaskRequest):
+    """Run an explicit agent task (DeepAgent preferred with fallback runtime)."""
+    try:
+        normalized_agent_type = (request.agent_type or "").strip().lower()
+        try:
+            agent_type = AgentType(normalized_agent_type)
+        except ValueError:
+            allowed = [agent.value for agent in AgentType]
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid agent_type '{request.agent_type}'. Allowed values: {allowed}",
+            )
+
+        orchestrator = get_orchestrator()
+        result = await orchestrator.run_agent_task(
+            agent_type=agent_type,
+            task=request.task,
+            context=request.context or {},
+        )
+
+        if not result.get("success"):
+            return APIResponse(
+                success=False,
+                error=str(result.get("error") or "Agent task failed"),
+                data=result,
+            )
+
+        return APIResponse(
+            success=True,
+            message="Agent task completed",
+            data=result,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error running agent task: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ============================================================================
 # Semantic Matching Routes
 # ============================================================================
@@ -303,26 +343,30 @@ async def select_analyses(request: QuestionMappingRequest):
     Returns list of analysis types to execute
     """
     try:
-        # Create mock mappings for analysis selection
-        mock_mappings = [
-            {
-                "question_id": f"q_{i}",
-                "question_text": q,
-                "recommended_analyses": ["descriptive_stats"]
-            }
-            for i, q in enumerate(request.questions)
+        matcher = get_semantic_matcher()
+        mappings = await matcher.get_question_element_mappings(
+            questions=request.questions,
+            datasets=request.datasets,
+            user_goals=request.user_goals
+        )
+        mapping_payload = [
+            mapping.dict() if hasattr(mapping, "dict") else mapping
+            for mapping in mappings
         ]
 
         analysis_types = select_analysis_types_for_questions(
             questions=request.questions,
-            mappings=mock_mappings,
+            mappings=mapping_payload,
             user_goals=request.user_goals
         )
 
         return APIResponse(
             success=True,
             message=f"Selected {len(analysis_types)} analysis types",
-            data={"analysis_types": analysis_types}
+            data={
+                "analysis_types": analysis_types,
+                "mapping_count": len(mapping_payload),
+            }
         )
     except Exception as e:
         logger.error(f"Error selecting analyses: {e}", exc_info=True)
@@ -482,30 +526,13 @@ async def execute_analysis(request: ExecuteAnalysisRequest):
 
     Runs specified analysis types and returns results
     """
-    try:
-        # In a real implementation, this would:
-        # 1. Load the dataset
-        # 2. Execute analysis scripts
-        # 3. Return standardized results
-
-        # For now, return mock response
-        results = {
-            analysis_type: {
-                "success": True,
-                "data": {},
-                "metadata": {"execution_time_ms": 1000}
-            }
-            for analysis_type in request.analysis_types
-        }
-
-        return APIResponse(
-            success=True,
-            message=f"Executed {len(request.analysis_types)} analyses",
-            data=results
-        )
-    except Exception as e:
-        logger.error(f"Error executing analysis: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "Deprecated endpoint. Use POST /api/v1/projects/{project_id}/analyze "
+            "or POST /api/analysis-execution/execute for real analysis execution."
+        ),
+    )
 
 
 @analysis_router.get("/types", response_model=APIResponse)
@@ -562,386 +589,6 @@ async def get_business_definitions(category: Optional[str] = None):
 
 
 # ============================================================================
-# Legacy Compatibility Routes
-# For backward compatibility with existing Node.js client
-# ============================================================================
-
-class ProjectCreateRequest(BaseModel):
-    """Legacy project creation request"""
-    name: str = Field(..., description="Project name")
-    description: Optional[str] = Field(None, description="Project description")
-    journeyType: Optional[str] = Field(None, description="Journey type")
-
-class DatasetCreateLegacy(BaseModel):
-    """Legacy dataset creation request"""
-    name: str = Field(..., description="Dataset name")
-    description: Optional[str] = Field(None, description="Dataset description")
-    sourceType: str = Field(..., description="Source type")
-    sourceUri: Optional[str] = Field(None, description="Source URI")
-
-
-@router.post("/projects/upload", response_model=APIResponse)
-async def legacy_upload(
-    file: UploadFile,
-    name: Optional[str] = None,
-    description: Optional[str] = None,
-    questions: Optional[str] = None,
-    isTrial: Optional[bool] = None,
-    piiHandled: Optional[bool] = None,
-    anonymizationApplied: Optional[bool] = None,
-    selectedColumns: Optional[str] = None,
-    journeyType: Optional[str] = None
-):
-    """
-    Legacy upload endpoint for compatibility with existing client
-
-    Matches the existing Node.js backend's `/api/projects/upload` endpoint
-    """
-    try:
-        # In a real implementation, this would:
-        # 1. Save the uploaded file
-        # 2. Detect PII
-        # 3. Infer schema
-        # 4. Store in database
-
-        # For now, return a mock response
-        return APIResponse(
-            success=True,
-            message="File uploaded successfully",
-            data={
-                "dataset_id": str(uuid.uuid4()),
-                "name": name,
-                "size": file.size if file else 0,
-                "file_name": file.filename if file else ""
-            }
-        )
-    except Exception as e:
-        logger.error(f"Error in legacy upload: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/projects", response_model=APIResponse)
-async def legacy_get_projects():
-    """Legacy get projects endpoint"""
-    try:
-        # Mock response - in production would fetch from database
-        return APIResponse(
-            success=True,
-            data=[]
-        )
-    except Exception as e:
-        logger.error(f"Error getting projects: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/projects", response_model=APIResponse)
-async def legacy_create_project(project: ProjectCreateRequest):
-    """Legacy create project endpoint"""
-    try:
-        # Mock response - in production would create in database
-        return APIResponse(
-            success=True,
-            message="Project created",
-            data={
-                "id": str(uuid.uuid4()),
-                "name": project.name,
-                "description": project.description,
-                "journey_type": project.journeyType
-            }
-        )
-    except Exception as e:
-        logger.error(f"Error creating project: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/datasets", response_model=APIResponse)
-async def legacy_get_datasets():
-    """Legacy get datasets endpoint"""
-    try:
-        return APIResponse(
-            success=True,
-            data=[]
-        )
-    except Exception as e:
-        logger.error(f"Error getting datasets: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/datasets/{dataset_id}", response_model=APIResponse)
-async def legacy_get_dataset(dataset_id: str):
-    """Legacy get dataset endpoint"""
-    try:
-        return APIResponse(
-            success=True,
-            data={"id": dataset_id}
-        )
-    except Exception as e:
-        logger.error(f"Error getting dataset: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/projects/{project_id}", response_model=APIResponse)
-async def legacy_get_project(project_id: str):
-    """Legacy get project endpoint"""
-    try:
-        return APIResponse(
-            success=True,
-            data={"id": project_id, "journey_state": {}}
-        )
-    except Exception as e:
-        logger.error(f"Error getting project: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/projects/{project_id}/datasets", response_model=APIResponse)
-async def legacy_get_project_datasets(project_id: str):
-    """Legacy get project datasets endpoint"""
-    try:
-        return APIResponse(
-            success=True,
-            data=[]
-        )
-    except Exception as e:
-        logger.error(f"Error getting project datasets: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.delete("/projects/{project_id}", response_model=APIResponse)
-async def legacy_delete_project(project_id: str):
-    """Legacy delete project endpoint"""
-    try:
-        return APIResponse(
-            success=True,
-            message="Project deleted"
-        )
-    except Exception as e:
-        logger.error(f"Error deleting project: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.put("/projects/{project_id}/schema", response_model=APIResponse)
-async def legacy_update_schema(project_id: str, schema: Dict[str, Any]):
-    """Legacy update project schema endpoint"""
-    try:
-        return APIResponse(
-            success=True,
-            message="Schema updated",
-            data=schema
-        )
-    except Exception as e:
-        logger.error(f"Error updating schema: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/projects/{project_id}/datasets", response_model=APIResponse)
-async def legacy_add_dataset_to_project(project_id: str, datasetId: str, role: Optional[str] = None):
-    """Legacy add dataset to project endpoint"""
-    try:
-        return APIResponse(
-            success=True,
-            message="Dataset added to project"
-        )
-    except Exception as e:
-        logger.error(f"Error adding dataset to project: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.delete("/projects/{project_id}/datasets/{dataset_id}", response_model=APIResponse)
-async def legacy_remove_dataset_from_project(project_id: str, dataset_id: str):
-    """Legacy remove dataset from project endpoint"""
-    try:
-        return APIResponse(
-            success=True,
-            message="Dataset removed from project"
-        )
-    except Exception as e:
-        logger.error(f"Error removing dataset: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/project-session/current", response_model=APIResponse)
-async def legacy_get_project_session(journeyType: Optional[str] = None):
-    """Legacy get project session endpoint"""
-    try:
-        return APIResponse(
-            success=True,
-            data={
-                "session_id": str(uuid.uuid4()),
-                "current_step": "upload",
-                "journey_type": journeyType
-            }
-        )
-    except Exception as e:
-        logger.error(f"Error getting project session: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# More legacy compatibility endpoints
-
-@router.get("/pricing", response_model=APIResponse)
-async def legacy_get_pricing():
-    """Legacy get pricing endpoint"""
-    try:
-        return APIResponse(
-            success=True,
-            data={
-                "free": {"analyses": 5, "storage_mb": 100},
-                "pro": {"analyses": 50, "storage_mb": 1000, "price_usd": 29}
-            }
-        )
-    except Exception as e:
-        logger.error(f"Error getting pricing: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/create-payment-intent", response_model=APIResponse)
-async def legacy_create_payment_intent(features: List[str], projectId: str):
-    """Legacy create payment intent endpoint"""
-    try:
-        return APIResponse(
-            success=True,
-            data={
-                "intent_id": str(uuid.uuid4()),
-                "status": "created"
-            }
-        )
-    except Exception as e:
-        logger.error(f"Error creating payment intent: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/projects/{project_id}/journey-state", response_model=APIResponse)
-async def legacy_get_journey_state(project_id: str):
-    """Legacy get journey state endpoint"""
-    try:
-        return APIResponse(
-            success=True,
-            data={
-                "journeyState": {},
-                "currentStep": "upload"
-            }
-        )
-    except Exception as e:
-        logger.error(f"Error getting journey state: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.put("/projects/{project_id}/progress", response_model=APIResponse)
-async def legacy_update_progress(project_id: str, progress: Dict[str, Any]):
-    """Legacy update project progress endpoint"""
-    try:
-        return APIResponse(
-            success=True,
-            message="Progress updated"
-        )
-    except Exception as e:
-        logger.error(f"Error updating progress: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/projects/{project_id}/artifacts", response_model=APIResponse)
-async def legacy_get_artifacts(project_id: str):
-    """Legacy get project artifacts endpoint"""
-    try:
-        return APIResponse(
-            success=True,
-            data=[]
-        )
-    except Exception as e:
-        logger.error(f"Error getting artifacts: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/projects/{project_id}/export", response_model=APIResponse)
-async def legacy_export_project(project_id: str, format: str = "pdf"):
-    """Legacy export project endpoint"""
-    try:
-        return APIResponse(
-            success=True,
-            data={
-                "download_url": f"/api/v1/projects/{project_id}/export?format={format}"
-            }
-        )
-    except Exception as e:
-        logger.error(f"Error exporting project: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# Authentication endpoints for legacy compatibility
-
-class LoginRequest(BaseModel):
-    """Login request"""
-    email: str = Field(..., description="Email")
-    password: str = Field(..., description="Password")
-
-
-class RegisterRequest(BaseModel):
-    """Registration request"""
-    email: str = Field(..., description="Email")
-    name: str = Field(..., description="Name")
-    password: str = Field(..., description="Password")
-
-
-@router.post("/auth/login", response_model=APIResponse)
-async def legacy_login(request: LoginRequest):
-    """Legacy login endpoint"""
-    try:
-        # Mock implementation - in production would verify credentials
-        return APIResponse(
-            success=True,
-            message="Login successful",
-            data={
-                "token": "mock_jwt_token_12345",
-                "user": {
-                    "id": str(uuid.uuid4()),
-                    "email": request.email,
-                    "name": request.email.split('@')[0],
-                    "is_admin": False
-                }
-            }
-        )
-    except Exception as e:
-        logger.error(f"Error in login: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/auth/register", response_model=APIResponse)
-async def legacy_register(request: RegisterRequest):
-    """Legacy registration endpoint"""
-    try:
-        # Mock implementation - in production would create user
-        return APIResponse(
-            success=True,
-            message="Registration successful",
-            data={
-                "user_id": str(uuid.uuid4()),
-                "email": request.email,
-                "name": request.name
-            }
-        )
-    except Exception as e:
-        logger.error(f"Error in registration: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/auth/refresh", response_model=APIResponse)
-async def legacy_auth_refresh():
-    """Legacy auth refresh endpoint"""
-    try:
-        # Mock implementation
-        return APIResponse(
-            success=True,
-            message="Token refreshed",
-            data={
-                "token": "mock_refreshed_token_12345"
-            }
-        )
-    except Exception as e:
-        logger.error(f"Error refreshing token: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ============================================================================
 # Include all routers in main app
 # ============================================================================
 
@@ -962,10 +609,4 @@ def include_routes(app):
     app.include_router(evidence_router, prefix="/api/v1")
     app.include_router(datasets_router, prefix="/api/v1")
     app.include_router(transformation_router, prefix="/api/v1")
-    app.include_router(provider_router, prefix="/api/v1")  # NEW: Provider management
-
-    # Include legacy compatibility routes (without /api/v1 prefix)
-    # These match the existing Node.js client's API structure
-    # Note: The main `router` object already has the legacy routes,
-    # so we include it directly without a prefix to match the client's expected paths
-    app.include_router(router, tags=["legacy"])
+    app.include_router(provider_router, prefix="/api/v1")  # Provider management

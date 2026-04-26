@@ -882,15 +882,14 @@ class DatabaseManager:
         Execute a query and return all results as a list of dicts.
 
         Compatible with asyncpg's fetch() method.
-        Handles both SQLAlchemy select() objects and raw SQL strings.
+        Supports dict params: fetch("SELECT * FROM t WHERE x = :x", {"x": 1})
         """
-        # Import here to avoid circular imports
         from ..db import get_db_context
         prepared_query, query_type = self._prepare_query(query)
         async with get_db_context() as session:
-            # For raw SQL, pass args as tuple; for SQLAlchemy queries, no args needed
             if query_type == "raw_sql":
-                result = await session.execute(prepared_query, args if args else ())
+                params = args[0] if args and isinstance(args[0], dict) else (args if args else ())
+                result = await session.execute(prepared_query, params)
             else:
                 result = await session.execute(prepared_query)
             # Convert result to list of dicts
@@ -904,14 +903,15 @@ class DatabaseManager:
 
         Compatible with asyncpg's fetchrow() method.
         Handles both SQLAlchemy select() objects and raw SQL strings.
+        Supports dict params: fetchrow("SELECT * FROM t WHERE id = :id", {"id": "123"})
         """
-        # Import here to avoid circular imports
         from ..db import get_db_context
         prepared_query, query_type = self._prepare_query(query)
         async with get_db_context() as session:
-            # For raw SQL, pass args as tuple; for SQLAlchemy queries, no args needed
             if query_type == "raw_sql":
-                result = await session.execute(prepared_query, args if args else ())
+                # Support dict params (SQLAlchemy named :params)
+                params = args[0] if args and isinstance(args[0], dict) else (args if args else ())
+                result = await session.execute(prepared_query, params)
             else:
                 result = await session.execute(prepared_query)
             row = result.first()
@@ -923,16 +923,14 @@ class DatabaseManager:
         """
         Execute a query and return a single scalar value.
 
-        Compatible with asyncpg's fetchval() method.
-        Handles both SQLAlchemy select() objects and raw SQL strings.
+        Supports dict params: fetchval("SELECT x FROM t WHERE id = :id", {"id": "123"})
         """
-        # Import here to avoid circular imports
         from ..db import get_db_context
         prepared_query, query_type = self._prepare_query(query)
         async with get_db_context() as session:
-            # For raw SQL, pass args as tuple; for SQLAlchemy queries, no args needed
             if query_type == "raw_sql":
-                result = await session.execute(prepared_query, args if args else ())
+                params = args[0] if args and isinstance(args[0], dict) else (args if args else ())
+                result = await session.execute(prepared_query, params)
             else:
                 result = await session.execute(prepared_query)
             row = result.first()
@@ -945,15 +943,14 @@ class DatabaseManager:
         Execute a query and return the result string.
 
         Compatible with asyncpg's execute() method.
-        Handles both SQLAlchemy statements and raw SQL strings.
+        Supports dict params: execute("INSERT INTO t (x) VALUES (:x)", {"x": 1})
         """
-        # Import here to avoid circular imports
         from ..db import get_db_context
         prepared_query, query_type = self._prepare_query(query)
         async with get_db_context() as session:
-            # For raw SQL, pass args as tuple; for SQLAlchemy queries, no args needed
             if query_type == "raw_sql":
-                result = await session.execute(prepared_query, args if args else ())
+                params = args[0] if args and isinstance(args[0], dict) else (args if args else ())
+                result = await session.execute(prepared_query, params)
             else:
                 result = await session.execute(prepared_query)
             await session.commit()

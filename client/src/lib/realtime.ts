@@ -223,9 +223,17 @@ export class RealtimeClient {
         this.log('Connection established', data);
         return;
       }
+      if (data.type === 'connected' || data.status === 'connected') {
+        this.log('Connected acknowledgement received', data);
+        return;
+      }
 
       if (data.type === 'subscription_confirmed') {
         this.log('Subscription confirmed for channels:', data.data.channels);
+        return;
+      }
+      if (data.type === 'subscribed') {
+        this.log('Project subscription confirmed:', data.project_id || data.data?.project_id);
         return;
       }
 
@@ -651,10 +659,15 @@ export class RealtimeClient {
 
     // Subscribe on server if connected
     if (this.connectionState === 'connected') {
-      this.sendMessage({
+      const subscribePayload: any = {
         type: 'subscribe',
         channels: [channel],
-      });
+      };
+      const projectMatch = channel.match(/^project:([a-zA-Z0-9_-]+)$/);
+      if (projectMatch) {
+        subscribePayload.project_id = projectMatch[1];
+      }
+      this.sendMessage(subscribePayload);
     }
 
     // Trigger with cached data if requested
@@ -678,10 +691,15 @@ export class RealtimeClient {
 
           // Unsubscribe on server if connected
           if (this.connectionState === 'connected') {
-            this.sendMessage({
+            const unsubscribePayload: any = {
               type: 'unsubscribe',
               channels: [channel],
-            });
+            };
+            const projectMatch = channel.match(/^project:([a-zA-Z0-9_-]+)$/);
+            if (projectMatch) {
+              unsubscribePayload.project_id = projectMatch[1];
+            }
+            this.sendMessage(unsubscribePayload);
           }
         }
       }
@@ -694,10 +712,15 @@ export class RealtimeClient {
     this.persistentSubscriptions.delete(channel);
 
     if (this.connectionState === 'connected') {
-      this.sendMessage({
+      const unsubscribePayload: any = {
         type: 'unsubscribe',
         channels: [channel],
-      });
+      };
+      const projectMatch = channel.match(/^project:([a-zA-Z0-9_-]+)$/);
+      if (projectMatch) {
+        unsubscribePayload.project_id = projectMatch[1];
+      }
+      this.sendMessage(unsubscribePayload);
     }
   }
 

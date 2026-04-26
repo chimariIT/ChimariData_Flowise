@@ -1,445 +1,868 @@
 """
 Project Routes for Chimaridata Python Backend
 
-Provides REST API endpoints for:
-- Project management
-- Required data elements
-- Project planning
-- Cost estimation
+Real DB implementation using raw SQL (sa_text) against the Drizzle-created
+PostgreSQL schema.  Does NOT use the SQLAlchemy ORM models because those
+don't match the actual table columns.
+
+Pattern: same as auth_routes.py — sa_text + get_db_context + ORJSONResponse.
 """
 
-from typing import List, Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime
+from enum import Enum
+import json
 import logging
 import uuid
 
-from fastapi import APIRouter, HTTPException, Depends, Query, status
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, HTTPException, Depends, Body, status
+from fastapi.responses import ORJSONResponse
+from pydantic import BaseModel, Field, ConfigDict
 
-from ..auth.middleware import get_current_user, User
+from sqlalchemy import text as sa_text
+
 from ..db import get_db_context
-from ..models.database import Project
-from sqlalchemy import select
+from ..auth.middleware import get_current_user, User as AuthUser
 
 logger = logging.getLogger(__name__)
 
-# Create router
 router = APIRouter()
 
 
 # ============================================================================
-# Request/Response Models
+# Constants
 # ============================================================================
 
-class RequiredDataElementsRequest(BaseModel):
-    """Request for required data elements"""
-    project_id: str = Field(..., description="Project ID")
-    journey_type: str = Field(default="non-tech", description="Journey type")
-    user_questions: List[str] = Field(default_factory=list, description="User questions")
+VALID_JOURNEY_TYPES = {"non-tech", "business", "technical", "consultation", "custom"}
+JOURNEY_TYPE_ALIASES = {
+    # Non-technical guided aliases (legacy + frontend variants)
+    "ai_guided": "non-tech",
+    "ai-guided": "non-tech",
+    "guided": "non-tech",
+    "nontech": "non-tech",
+    "non_tech": "non-tech",
+    "nontechnical": "non-tech",
+    "non-technical": "non-tech",
+    # Technical aliases
+    "tech": "technical",
+    "technical_ai": "technical",
+    "technical-ai": "technical",
+    # Consultation aliases
+    "expert_consultation": "consultation",
+    "expert-consultation": "consultation",
+}
 
 
-class RequiredDataElementsResponse(BaseModel):
-    """Response with required data elements"""
-    project_id: str
-    required_elements: List[Dict[str, Any]]
-    optional_elements: List[Dict[str, Any]]
-    mapped_questions: List[Dict[str, Any]]
-    confidence_score: float
+def _normalize_journey_type(journey_type: str) -> str:
+    """Normalize journey type values from legacy/frontend aliases."""
+    normalized = (journey_type or "").strip().lower().replace(" ", "-")
+    normalized = JOURNEY_TYPE_ALIASES.get(normalized, normalized)
+
+    if normalized not in VALID_JOURNEY_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Invalid journeyType. Must be one of: "
+                f"{', '.join(sorted(VALID_JOURNEY_TYPES))}"
+            ),
+        )
+
+    return normalized
 
 
-class ProjectPlanRequest(BaseModel):
-    """Request for project plan"""
-    project_id: str = Field(..., description="Project ID")
-    journey_type: str = Field(default="non-tech", description="Journey type")
-    user_goals: List[str] = Field(default_factory=list, description="User goals")
-    user_questions: List[str] = Field(default_factory=list, description="User questions")
-
-
-class ProjectPlanResponse(BaseModel):
-    """Response with project plan"""
-    project_id: str
-    journey_type: str
-    analysis_types: List[str]
-    required_steps: List[Dict[str, Any]]
-    estimated_duration_minutes: int
-    data_requirements: Dict[str, Any]
-
-
-class CostEstimateRequest(BaseModel):
-    """Request for cost estimate"""
-    project_id: str = Field(..., description="Project ID")
-    analysis_types: List[str] = Field(default_factory=list, description="Analysis types")
-    dataset_size: int = Field(default=0, description="Dataset size in rows")
-
-
-class CostEstimateResponse(BaseModel):
-    """Response with cost estimate"""
-    project_id: str
-    total_cost_cents: int
-    breakdown: Dict[str, Any]
-    currency: str = "USD"
-    is_paid: bool = False
-    payment_status: str = "pending"
-
-
-class AnalysisScenarioRequest(BaseModel):
-    """Request for analysis scenario suggestions"""
-    project_id: str = Field(..., description="Project ID")
-    dataset_id: str = Field(..., description="Dataset ID")
-    user_goals: List[str] = Field(default_factory=list, description="User goals")
-
+# ============================================================================
+# Pydantic Request Models
+# ============================================================================
 
 class CreateProjectRequest(BaseModel):
     """Request to create a new project"""
-    user_id: str = Field(..., description="User ID")
     name: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
-    industry: Optional[str] = None
-    journey_type: str = "business"
+    journeyType: str = Field(default="business", alias="journey_type")
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
-class CreateProjectResponse(BaseModel):
-    """Response after creating project"""
-    success: bool
-    project_id: str
-    name: str
-    journey_step: str
+class UpdateProjectRequest(BaseModel):
+    """Request to update a project — all fields optional"""
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    description: Optional[str] = None
+    status: Optional[str] = None
+    journeyType: Optional[str] = Field(None, alias="journey_type")
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
-class AnalysisScenarioResponse(BaseModel):
-    """Response with analysis scenario suggestions"""
-    project_id: str
-    recommended_scenarios: List[Dict[str, Any]]
-    confidence_scores: List[float]
+class ProgressUpdate(BaseModel):
+    """Accepts any JSONB fields for atomic merge into journey_progress"""
+    model_config = ConfigDict(extra="allow")
+
+
+class LinkDatasetRequest(BaseModel):
+    """Request to link a dataset to a project"""
+    datasetId: str = Field(..., alias="dataset_id")
+    role: str = "primary"
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class AgentRecommendationsRequest(BaseModel):
+    """Request payload for project-level agent recommendations."""
+    goals: str
+    questions: List[str]
+    dataSource: Optional[str] = "upload"
 
 
 # ============================================================================
-# Project Endpoints
+# Helpers
 # ============================================================================
 
-@router.get("/projects/{project_id}/required-data-elements", response_model=RequiredDataElementsResponse)
-async def get_required_data_elements(
-    project_id: str,
-    journey_type: str = Query("non-tech", description="Journey type"),
-    current_user: User = Depends(get_current_user)
-):
+def _serialize_row(row: dict) -> dict:
+    """Convert a raw DB row dict to JSON-safe camelCase dict."""
+    def _val(v):
+        if isinstance(v, datetime):
+            return v.isoformat()
+        return v
+
+    return {
+        "id": row.get("id"),
+        "userId": row.get("user_id"),
+        "name": row.get("name"),
+        "description": row.get("description"),
+        "status": row.get("status"),
+        "journeyType": row.get("journey_type"),
+        "journeyProgress": row.get("journey_progress") or {},
+        "analysisResults": row.get("analysis_results"),
+        "executionState": row.get("execution_state") or {},
+        "lockedCostEstimate": (
+            float(row["locked_cost_estimate"])
+            if row.get("locked_cost_estimate") is not None
+            else None
+        ),
+        "costBreakdown": row.get("cost_breakdown"),
+        "createdAt": _val(row.get("created_at")),
+        "updatedAt": _val(row.get("updated_at")),
+    }
+
+
+async def _fetch_project(session, project_id: str) -> Optional[dict]:
+    """Fetch a single project row as dict, or None."""
+    result = await session.execute(
+        sa_text("SELECT * FROM projects WHERE id = :id"),
+        {"id": project_id},
+    )
+    row = result.first()
+    if row is None:
+        return None
+    return dict(zip(result.keys(), row))
+
+
+async def _check_ownership(session, project_id: str, user: AuthUser) -> dict:
+    """Fetch project and verify ownership.  Raises 404 / 403."""
+    project = await _fetch_project(session, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project["user_id"] != user.id and not user.is_admin:
+        raise HTTPException(status_code=403, detail="Not authorized to access this project")
+    return project
+
+
+def _build_agent_recommendations(goals: str, questions: List[str]) -> Dict[str, Any]:
     """
-    Get required data elements for a project based on journey type and questions.
-
-    Analyzes the project's datasets and user questions to determine
-    which data elements are required for the analysis.
+    Build lightweight, deterministic recommendations when full agent orchestration
+    is unavailable on the Python compatibility endpoint.
     """
-    try:
-        async with get_db_context() as session:
-            # Query project
-            stmt = select(Project).where(Project.id == project_id)
-            result = await session.execute(stmt)
-            project = result.scalar_one_or_none()
+    lowered_questions = " ".join(q.lower() for q in questions)
+    question_count = len(questions)
 
-            if not project:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Project not found"
-                )
+    if question_count <= 2:
+        estimated_rows = 1000
+    elif question_count <= 5:
+        estimated_rows = 5000
+    else:
+        estimated_rows = 15000
 
-            # Extract requirements from journey_progress (SSOT)
-            journey_progress = project.journey_progress or {}
-            requirements_doc = journey_progress.get("requirementsDocument", {})
+    complexity = "moderate"
+    complexity_markers = ("predict", "forecast", "segment", "cluster", "driver", "causal", "regression")
+    if any(marker in lowered_questions for marker in complexity_markers) or question_count >= 6:
+        complexity = "high"
+    elif question_count <= 1:
+        complexity = "low"
 
-            return RequiredDataElementsResponse(
-                project_id=project_id,
-                required_elements=requirements_doc.get("requiredElements", []),
-                optional_elements=requirements_doc.get("optionalElements", []),
-                mapped_questions=requirements_doc.get("questionMappings", []),
-                confidence_score=requirements_doc.get("confidenceScore", 0.0)
-            )
+    recommended_analyses: List[str] = ["descriptive_stats"]
+    if any(token in lowered_questions for token in ("trend", "over time", "month", "quarter", "year")):
+        recommended_analyses.append("time_series")
+    if any(token in lowered_questions for token in ("compare", "relationship", "driver", "impact", "correlation")):
+        recommended_analyses.append("correlation")
+    if any(token in lowered_questions for token in ("predict", "forecast", "regression", "influence")):
+        recommended_analyses.append("regression")
+    if any(token in lowered_questions for token in ("segment", "cluster", "cohort")):
+        recommended_analyses.append("clustering")
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting required data elements: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get required data elements: {str(e)}"
-        )
+    # Keep deterministic order and uniqueness.
+    seen = set()
+    recommended_analyses = [a for a in recommended_analyses if not (a in seen or seen.add(a))]
 
+    if complexity == "high":
+        estimated_processing_time = "5-10 minutes"
+    elif complexity == "moderate":
+        estimated_processing_time = "2-5 minutes"
+    else:
+        estimated_processing_time = "1-2 minutes"
 
-@router.get("/projects/{project_id}/plan", response_model=ProjectPlanResponse)
-async def get_project_plan(
-    project_id: str,
-    journey_type: str = Query("non-tech", description="Journey type"),
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Get the analysis plan for a project.
-
-    Returns the planned analysis types, required steps, and
-    estimated duration based on the journey type.
-    """
-    try:
-        async with get_db_context() as session:
-            # Query project
-            stmt = select(Project).where(Project.id == project_id)
-            result = await session.execute(stmt)
-            project = result.scalar_one_or_none()
-
-            if not project:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Project not found"
-                )
-
-            # Extract plan from journey_progress
-            journey_progress = project.journey_progress or {}
-            analysis_plan = journey_progress.get("analysisPlan", {})
-
-            return ProjectPlanResponse(
-                project_id=project_id,
-                journey_type=journey_type,
-                analysis_types=analysis_plan.get("analysisTypes", ["descriptive", "correlation"]),
-                required_steps=analysis_plan.get("requiredSteps", []),
-                estimated_duration_minutes=analysis_plan.get("estimatedDurationMinutes", 5),
-                data_requirements=analysis_plan.get("dataRequirements", {})
-            )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting project plan: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get project plan: {str(e)}"
-        )
+    return {
+        "expectedDataSize": str(estimated_rows),
+        "analysisComplexity": complexity,
+        "rationale": (
+            f"Recommendations generated from {question_count} question(s) and stated goal."
+        ),
+        "confidence": 0.84 if complexity == "high" else 0.88,
+        "dataEngineering": {
+            "estimatedRows": estimated_rows,
+            "estimatedColumns": 12 if complexity == "low" else (24 if complexity == "moderate" else 40),
+            "dataCharacteristics": {
+                "questionCount": question_count,
+                "goalProvided": bool(goals and goals.strip()),
+            },
+        },
+        "dataScience": {
+            "recommendedAnalyses": recommended_analyses,
+            "suggestedVisualizations": (
+                ["bar_chart", "line_chart", "heatmap"]
+                if complexity != "low"
+                else ["bar_chart", "table_summary"]
+            ),
+            "estimatedProcessingTime": estimated_processing_time,
+        },
+    }
 
 
-@router.get("/projects/{project_id}/cost-estimate", response_model=CostEstimateResponse)
-async def get_cost_estimate(
-    project_id: str,
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Get cost estimate for a project.
-
-    Returns the estimated cost in cents based on the analysis types
-    and dataset size.
-    """
-    try:
-        async with get_db_context() as session:
-            # Query project
-            stmt = select(Project).where(Project.id == project_id)
-            result = await session.execute(stmt)
-            project = result.scalar_one_or_none()
-
-            if not project:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Project not found"
-                )
-
-            # Extract payment info from journey_progress
-            journey_progress = project.journey_progress or {}
-            payment_info = journey_progress.get("payment", {})
-            cost_estimate = journey_progress.get("costEstimate", {})
-
-            return CostEstimateResponse(
-                project_id=project_id,
-                total_cost_cents=cost_estimate.get("totalCostCents", 0),
-                breakdown=cost_estimate.get("breakdown", {
-                    "base_analysis": 0,
-                    "advanced_analysis": 0,
-                    "artifacts": 0
-                }),
-                currency="USD",
-                is_paid=payment_info.get("isPaid", False),
-                payment_status=payment_info.get("status", "pending")
-            )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting cost estimate: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get cost estimate: {str(e)}"
-        )
-
-
-@router.post("/projects", response_model=CreateProjectResponse)
-async def create_project(
-    request: CreateProjectRequest,
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Create a new project.
-
-    Creates a project record in the database and initializes
-    the journey progress structure.
-    """
-    try:
-        async with get_db_context() as session:
-            # Generate project ID
-            project_id = str(uuid.uuid4())
-
-            # Create project with initial journey progress
-            project = Project(
-                id=project_id,
-                user_id=request.user_id,
-                name=request.name,
-                description=request.description,
-                industry=request.industry,
-                journey_step="upload",
-                journey_progress={
-                    "journeyType": request.journey_type,
-                    "createdAt": datetime.utcnow().isoformat(),
-                    "status": "draft"
-                },
-                created_at=datetime.utcnow()
-            )
-
-            session.add(project)
-            await session.commit()
-            await session.refresh(project)
-
-            return CreateProjectResponse(
-                success=True,
-                project_id=project.id,
-                name=project.name,
-                journey_step=project.journey_step or "upload"
-            )
-
-    except Exception as e:
-        logger.error(f"Error creating project: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create project: {str(e)}"
-        )
-
+# ============================================================================
+# 1. GET /projects — list user's projects
+# ============================================================================
 
 @router.get("/projects")
-async def list_projects(
-    user_id: str = Query(..., description="User ID to filter projects"),
-    limit: int = Query(20, ge=1, le=100),
-    current_user: User = Depends(get_current_user)
-):
-    """
-    List projects for a user.
-
-    Returns all projects belonging to the specified user.
-    """
+async def list_projects(current_user: AuthUser = Depends(get_current_user)):
+    """Return all projects belonging to the authenticated user."""
     try:
         async with get_db_context() as session:
-            stmt = select(Project).where(
-                Project.user_id == user_id
-            ).order_by(Project.created_at.desc()).limit(limit)
+            result = await session.execute(
+                sa_text(
+                    "SELECT * FROM projects WHERE user_id = :user_id "
+                    "ORDER BY created_at DESC"
+                ),
+                {"user_id": current_user.id},
+            )
+            rows = result.fetchall()
+            projects = [
+                _serialize_row(dict(zip(result.keys(), r))) for r in rows
+            ]
 
-            result = await session.execute(stmt)
-            projects = result.scalars().all()
+        return ORJSONResponse(content={"success": True, "projects": projects})
 
-            return {
-                "success": True,
-                "projects": [
-                    {
-                        "id": p.id,
-                        "name": p.name,
-                        "description": p.description,
-                        "industry": p.industry,
-                        "journey_step": p.journey_step,
-                        "created_at": p.created_at.isoformat() if p.created_at else None
-                    }
-                    for p in projects
-                ],
-                "count": len(projects)
-            }
-
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error listing projects: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list projects: {str(e)}"
+        raise HTTPException(status_code=500, detail=f"Failed to list projects: {e}")
+
+
+# ============================================================================
+# 2. POST /projects — create project
+# ============================================================================
+
+@router.post("/projects")
+async def create_project(
+    request: CreateProjectRequest,
+    current_user: AuthUser = Depends(get_current_user),
+):
+    """Create a new project owned by the authenticated user."""
+    try:
+        journey_type = _normalize_journey_type(request.journeyType)
+
+        project_id = str(uuid.uuid4())
+        now_iso = datetime.utcnow().isoformat()
+        initial_progress = json.dumps({
+            "journeyType": journey_type,
+            "createdAt": now_iso,
+            "status": "draft",
+        })
+
+        async with get_db_context() as session:
+            await session.execute(
+                sa_text(
+                    "INSERT INTO projects "
+                    "(id, user_id, name, description, status, journey_type, "
+                    " journey_progress, created_at, updated_at) "
+                    "VALUES (:id, :user_id, :name, :description, 'draft', :journey_type, "
+                    " CAST(:journey_progress AS jsonb), NOW(), NOW())"
+                ),
+                {
+                    "id": project_id,
+                    "user_id": current_user.id,
+                    "name": request.name,
+                    "description": request.description,
+                    "journey_type": journey_type,
+                    "journey_progress": initial_progress,
+                },
+            )
+            await session.commit()
+
+            # Fetch the created row to return full data
+            project = await _fetch_project(session, project_id)
+
+        return ORJSONResponse(
+            content={
+                "success": True,
+                "project": _serialize_row(project) if project else {"id": project_id},
+            }
         )
 
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating project: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to create project: {e}")
+
+
+# ============================================================================
+# 2b. POST /projects/{project_id}/agent-recommendations
+# ============================================================================
+
+@router.post("/projects/{project_id}/agent-recommendations")
+async def get_agent_recommendations(
+    project_id: str,
+    request: AgentRecommendationsRequest,
+    current_user: AuthUser = Depends(get_current_user),
+):
+    """Return agent-style recommendations for data requirements and analysis complexity."""
+    try:
+        if not request.goals or not request.questions:
+            raise HTTPException(status_code=400, detail="Goals and questions are required")
+
+        async with get_db_context() as session:
+            await _check_ownership(session, project_id, current_user)
+
+        recommendations = _build_agent_recommendations(request.goals, request.questions)
+
+        return ORJSONResponse(content={
+            "success": True,
+            "recommendations": recommendations,
+            "metadata": {
+                "generatedAt": datetime.utcnow().isoformat(),
+                "agents": ["data_engineer", "data_scientist"],
+                "dataSource": request.dataSource or "upload",
+            },
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating agent recommendations: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to generate recommendations: {e}")
+
+
+# ============================================================================
+# 3. GET /projects/{project_id} — get single project
+# ============================================================================
 
 @router.get("/projects/{project_id}")
 async def get_project(
     project_id: str,
-    current_user: User = Depends(get_current_user)
+    current_user: AuthUser = Depends(get_current_user),
 ):
-    """
-    Get a project by ID.
-
-    Returns full project details including journey progress.
-    """
+    """Return a single project with ownership check."""
     try:
         async with get_db_context() as session:
-            stmt = select(Project).where(Project.id == project_id)
-            result = await session.execute(stmt)
-            project = result.scalar_one_or_none()
+            project = await _check_ownership(session, project_id, current_user)
 
-            if not project:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Project not found"
-                )
-
-            return {
-                "success": True,
-                "project": {
-                    "id": project.id,
-                    "name": project.name,
-                    "description": project.description,
-                    "industry": project.industry,
-                    "journey_step": project.journey_step,
-                    "journey_progress": project.journey_progress,
-                    "created_at": project.created_at.isoformat() if project.created_at else None,
-                    "updated_at": project.updated_at.isoformat() if project.updated_at else None
-                }
-            }
+        return ORJSONResponse(
+            content={"success": True, "project": _serialize_row(project)}
+        )
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error getting project: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get project: {str(e)}"
+        raise HTTPException(status_code=500, detail=f"Failed to get project: {e}")
+
+
+# ============================================================================
+# 4. PUT /projects/{project_id} — update project
+# ============================================================================
+
+@router.put("/projects/{project_id}")
+async def update_project(
+    project_id: str,
+    request: UpdateProjectRequest,
+    current_user: AuthUser = Depends(get_current_user),
+):
+    """Update project fields (name, description, status, journeyType)."""
+    try:
+        async with get_db_context() as session:
+            await _check_ownership(session, project_id, current_user)
+
+            # Build dynamic SET clause from provided fields
+            set_clauses = ["updated_at = NOW()"]
+            params: Dict[str, Any] = {"id": project_id}
+
+            if request.name is not None:
+                set_clauses.append("name = :name")
+                params["name"] = request.name
+            if request.description is not None:
+                set_clauses.append("description = :description")
+                params["description"] = request.description
+            if request.status is not None:
+                set_clauses.append("status = :status")
+                params["status"] = request.status
+            if request.journeyType is not None:
+                normalized_journey_type = _normalize_journey_type(request.journeyType)
+                set_clauses.append("journey_type = :journey_type")
+                params["journey_type"] = normalized_journey_type
+
+            sql = f"UPDATE projects SET {', '.join(set_clauses)} WHERE id = :id"
+            await session.execute(sa_text(sql), params)
+            await session.commit()
+
+            # Return updated row
+            project = await _fetch_project(session, project_id)
+
+        return ORJSONResponse(
+            content={"success": True, "project": _serialize_row(project) if project else None}
         )
 
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating project: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to update project: {e}")
 
-@router.post("/analysis/suggest-scenarios", response_model=AnalysisScenarioResponse)
-async def suggest_analysis_scenarios(request: AnalysisScenarioRequest):
+
+# ============================================================================
+# 5. DELETE /projects/{project_id} — delete project
+# ============================================================================
+
+@router.delete("/projects/{project_id}")
+async def delete_project(
+    project_id: str,
+    current_user: AuthUser = Depends(get_current_user),
+):
+    """Delete a project and its dataset links."""
+    try:
+        async with get_db_context() as session:
+            await _check_ownership(session, project_id, current_user)
+
+            # Remove junction rows first
+            await session.execute(
+                sa_text("DELETE FROM project_datasets WHERE project_id = :id"),
+                {"id": project_id},
+            )
+            # Remove the project itself
+            await session.execute(
+                sa_text("DELETE FROM projects WHERE id = :id"),
+                {"id": project_id},
+            )
+            await session.commit()
+
+        return ORJSONResponse(content={"success": True, "message": "Project deleted"})
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting project: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to delete project: {e}")
+
+
+# ============================================================================
+# 6. PUT /projects/{project_id}/progress — atomic JSONB merge
+# ============================================================================
+
+@router.put("/projects/{project_id}/progress")
+async def update_progress(
+    project_id: str,
+    progress: Dict[str, Any] = Body(...),
+    current_user: AuthUser = Depends(get_current_user),
+):
     """
-    Suggest analysis scenarios based on project data.
-
-    Analyzes the dataset and user goals to recommend appropriate
-    analysis scenarios.
+    Atomic merge into journey_progress using PostgreSQL || operator.
+    Existing keys not in the payload are preserved.
     """
     try:
-        # TODO: Implement actual scenario suggestion logic
-        # For now, return placeholder scenarios
-        return AnalysisScenarioResponse(
-            project_id=request.project_id,
-            recommended_scenarios=[
-                {
-                    "id": "descriptive",
-                    "name": "Descriptive Statistics",
-                    "description": "Basic statistical summary",
-                    "analysis_types": ["descriptive"]
-                },
-                {
-                    "id": "correlation",
-                    "name": "Correlation Analysis",
-                    "description": "Explore relationships between variables",
-                    "analysis_types": ["correlation"]
-                }
-            ],
-            confidence_scores=[0.9, 0.8]
+        async with get_db_context() as session:
+            await _check_ownership(session, project_id, current_user)
+
+            await session.execute(
+                sa_text(
+                    "UPDATE projects "
+                    "SET journey_progress = COALESCE(journey_progress, CAST('{}' AS jsonb)) || CAST(:new_progress AS jsonb), "
+                    "    updated_at = NOW() "
+                    "WHERE id = :id"
+                ),
+                {"id": project_id, "new_progress": json.dumps(progress)},
+            )
+            await session.commit()
+
+            # Return the merged journey_progress
+            project = await _fetch_project(session, project_id)
+            jp = (project.get("journey_progress") or {}) if project else {}
+
+        return ORJSONResponse(
+            content={"success": True, "journeyProgress": jp}
         )
+
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error suggesting scenarios: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to suggest scenarios: {str(e)}"
+        logger.error(f"Error updating progress: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to update progress: {e}")
+
+
+# ============================================================================
+# 7. GET /projects/{project_id}/datasets — linked datasets
+# ============================================================================
+
+@router.get("/projects/{project_id}/datasets")
+async def get_project_datasets(
+    project_id: str,
+    current_user: AuthUser = Depends(get_current_user),
+):
+    """Return datasets linked to this project via the project_datasets junction."""
+    try:
+        async with get_db_context() as session:
+            await _check_ownership(session, project_id, current_user)
+
+            result = await session.execute(
+                sa_text(
+                    "SELECT d.*, pd.role, pd.added_at "
+                    "FROM datasets d "
+                    "INNER JOIN project_datasets pd ON pd.dataset_id = d.id "
+                    "WHERE pd.project_id = :project_id "
+                    "ORDER BY pd.added_at DESC"
+                ),
+                {"project_id": project_id},
+            )
+            rows = result.fetchall()
+            keys = result.keys()
+            datasets = []
+            for r in rows:
+                row_dict = dict(zip(keys, r))
+                # Serialize datetime fields
+                for k, v in row_dict.items():
+                    if isinstance(v, datetime):
+                        row_dict[k] = v.isoformat()
+                datasets.append(row_dict)
+
+        return ORJSONResponse(content={"success": True, "datasets": datasets})
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting project datasets: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get project datasets: {e}")
+
+
+# ============================================================================
+# 8. POST /projects/{project_id}/datasets — link dataset to project
+# ============================================================================
+
+@router.post("/projects/{project_id}/datasets")
+async def link_dataset(
+    project_id: str,
+    request: LinkDatasetRequest,
+    current_user: AuthUser = Depends(get_current_user),
+):
+    """Link an existing dataset to this project."""
+    try:
+        async with get_db_context() as session:
+            await _check_ownership(session, project_id, current_user)
+
+            link_id = str(uuid.uuid4())
+            await session.execute(
+                sa_text(
+                    "INSERT INTO project_datasets (id, project_id, dataset_id, role, added_at) "
+                    "VALUES (:id, :project_id, :dataset_id, :role, NOW()) "
+                    "ON CONFLICT DO NOTHING"
+                ),
+                {
+                    "id": link_id,
+                    "project_id": project_id,
+                    "dataset_id": request.datasetId,
+                    "role": request.role,
+                },
+            )
+            await session.commit()
+
+        return ORJSONResponse(
+            content={"success": True, "message": "Dataset linked to project"}
         )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error linking dataset: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to link dataset: {e}")
+
+
+# ============================================================================
+# 9. GET /projects/{project_id}/checkpoints — from journey_progress
+# ============================================================================
+
+@router.get("/projects/{project_id}/checkpoints")
+async def get_checkpoints(
+    project_id: str,
+    current_user: AuthUser = Depends(get_current_user),
+):
+    """Return checkpoints stored inside journey_progress."""
+    try:
+        async with get_db_context() as session:
+            project = await _check_ownership(session, project_id, current_user)
+
+        jp = project.get("journey_progress") or {}
+        checkpoints = jp.get("checkpoints", [])
+
+        return ORJSONResponse(
+            content={"success": True, "checkpoints": checkpoints}
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting checkpoints: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get checkpoints: {e}")
+
+
+# ============================================================================
+# 10. GET /projects/{project_id}/cost-estimate — from journey_progress
+# ============================================================================
+
+@router.post("/projects/{project_id}/checkpoints")
+async def create_checkpoint(
+    project_id: str,
+    payload: Dict[str, Any] = Body(default_factory=dict),
+    current_user: AuthUser = Depends(get_current_user),
+):
+    """Create a user-visible checkpoint inside journey_progress."""
+    try:
+        async with get_db_context() as session:
+            project = await _check_ownership(session, project_id, current_user)
+            jp = project.get("journey_progress") or {}
+            checkpoint = {
+                "id": payload.get("id") or str(uuid.uuid4()),
+                "projectId": project_id,
+                "stage": payload.get("stage") or payload.get("stepName") or "review",
+                "agentId": payload.get("agentId") or payload.get("agentType") or "project_manager",
+                "agentType": payload.get("agentType") or payload.get("agentId") or "project_manager",
+                "stepName": payload.get("stepName") or payload.get("stage") or "review",
+                "status": payload.get("status") or "waiting_approval",
+                "message": payload.get("message") or "Review and approve the proposed workflow step.",
+                "data": payload.get("data") or {"artifacts": payload.get("artifacts", [])},
+                "requiresUserInput": payload.get("requiresUserInput", True),
+                "userVisible": payload.get("userVisible", True),
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+            checkpoints = jp.get("checkpoints", [])
+            checkpoints.append(checkpoint)
+            jp["checkpoints"] = checkpoints
+            await session.execute(
+                sa_text(
+                    "UPDATE projects SET journey_progress = CAST(:jp AS jsonb), "
+                    "updated_at = NOW() WHERE id = :id"
+                ),
+                {"jp": json.dumps(jp), "id": project_id},
+            )
+            await session.commit()
+
+        return ORJSONResponse(content={"success": True, "checkpoint": checkpoint})
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating checkpoint: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to create checkpoint: {e}")
+
+
+@router.post("/projects/{project_id}/checkpoints/{checkpoint_id}/feedback")
+async def submit_checkpoint_feedback(
+    project_id: str,
+    checkpoint_id: str,
+    payload: Dict[str, Any] = Body(default_factory=dict),
+    current_user: AuthUser = Depends(get_current_user),
+):
+    """Record approval/rejection feedback for a checkpoint."""
+    try:
+        async with get_db_context() as session:
+            project = await _check_ownership(session, project_id, current_user)
+            jp = project.get("journey_progress") or {}
+            checkpoints = jp.get("checkpoints", [])
+            matched = None
+            for checkpoint in checkpoints:
+                if checkpoint.get("id") == checkpoint_id:
+                    approved = bool(payload.get("approved"))
+                    checkpoint["status"] = "approved" if approved else "rejected"
+                    checkpoint["userFeedback"] = payload.get("feedback", "")
+                    checkpoint["respondedAt"] = datetime.utcnow().isoformat()
+                    matched = checkpoint
+                    break
+
+            if matched is None:
+                raise HTTPException(status_code=404, detail="Checkpoint not found")
+
+            jp["checkpoints"] = checkpoints
+            await session.execute(
+                sa_text(
+                    "UPDATE projects SET journey_progress = CAST(:jp AS jsonb), "
+                    "updated_at = NOW() WHERE id = :id"
+                ),
+                {"jp": json.dumps(jp), "id": project_id},
+            )
+            await session.commit()
+
+        return ORJSONResponse(content={"success": True, "checkpoint": matched})
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error submitting checkpoint feedback: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to submit checkpoint feedback: {e}")
+
+
+@router.get("/projects/{project_id}/cost-estimate")
+async def get_cost_estimate(
+    project_id: str,
+    current_user: AuthUser = Depends(get_current_user),
+):
+    """Return cost estimate from journey_progress + locked_cost_estimate column."""
+    try:
+        async with get_db_context() as session:
+            project = await _check_ownership(session, project_id, current_user)
+
+        jp = project.get("journey_progress") or {}
+        cost_estimate = jp.get("costEstimate", {})
+        payment_info = jp.get("payment", {})
+        locked = project.get("locked_cost_estimate")
+
+        return ORJSONResponse(content={
+            "success": True,
+            "projectId": project_id,
+            "totalCostCents": cost_estimate.get("totalCostCents", 0),
+            "lockedCostEstimate": float(locked) if locked is not None else None,
+            "breakdown": cost_estimate.get("breakdown", {}),
+            "costBreakdown": project.get("cost_breakdown"),
+            "currency": "USD",
+            "isPaid": payment_info.get("isPaid", False),
+            "paymentStatus": payment_info.get("status", "pending"),
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting cost estimate: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get cost estimate: {e}")
+
+
+# ============================================================================
+# 11. GET /projects/{project_id}/required-data-elements
+# ============================================================================
+
+@router.get("/projects/{project_id}/required-data-elements")
+async def get_required_data_elements(
+    project_id: str,
+    current_user: AuthUser = Depends(get_current_user),
+):
+    """Return required data elements from journey_progress.requirementsDocument."""
+    try:
+        async with get_db_context() as session:
+            project = await _check_ownership(session, project_id, current_user)
+
+        jp = project.get("journey_progress") or {}
+        requirements_doc = jp.get("requirementsDocument", {})
+
+        # Backward compatibility for legacy shape while preserving new document contract
+        required_elements = requirements_doc.get("requiredElements")
+        if not required_elements and requirements_doc.get("requiredDataElements"):
+            required_elements = [
+                {
+                    "name": el.get("elementName"),
+                    "type": el.get("dataType"),
+                    "description": el.get("description"),
+                    "priority": "required" if el.get("required", True) else "optional",
+                }
+                for el in requirements_doc.get("requiredDataElements", [])
+            ]
+
+        optional_elements = requirements_doc.get("optionalElements")
+        if not optional_elements and requirements_doc.get("optionalDataElements"):
+            optional_elements = [
+                {
+                    "name": el.get("elementName"),
+                    "type": el.get("dataType"),
+                    "description": el.get("description"),
+                }
+                for el in requirements_doc.get("optionalDataElements", [])
+            ]
+
+        mapped_questions = requirements_doc.get("questionMappings")
+        if not mapped_questions and requirements_doc.get("questionAnswerMapping"):
+            mapped_questions = [
+                {
+                    "question": qm.get("questionText"),
+                    "requiredColumns": qm.get("requiredDataElements", []),
+                    "analysisType": (qm.get("recommendedAnalyses") or ["descriptive_stats"])[0],
+                }
+                for qm in requirements_doc.get("questionAnswerMapping", [])
+            ]
+
+        return ORJSONResponse(content={
+            "success": True,
+            "projectId": project_id,
+            "document": requirements_doc,
+            "requiredElements": required_elements or [],
+            "optionalElements": optional_elements or [],
+            "mappedQuestions": mapped_questions or [],
+            "confidenceScore": requirements_doc.get("confidenceScore", 0.0),
+            "requirementsLocked": jp.get("requirementsLocked", False),
+            "requirementsLockedAt": jp.get("requirementsLockedAt"),
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting required data elements: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get required data elements: {e}")
+
+
+# ============================================================================
+# 12. GET /projects/{project_id}/journey-state
+# ============================================================================
+
+@router.get("/projects/{project_id}/journey-state")
+async def get_journey_state(
+    project_id: str,
+    current_user: AuthUser = Depends(get_current_user),
+):
+    """Return full journey state for the project."""
+    try:
+        async with get_db_context() as session:
+            project = await _check_ownership(session, project_id, current_user)
+
+        jp = project.get("journey_progress") or {}
+        execution_state = project.get("execution_state") or {}
+
+        return ORJSONResponse(content={
+            "success": True,
+            "projectId": project_id,
+            "journeyProgress": jp,
+            "executionState": execution_state,
+            "status": project.get("status", "draft"),
+            "journeyType": project.get("journey_type"),
+            "currentStep": jp.get("currentStep", "upload"),
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting journey state: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get journey state: {e}")
 
 
 # ============================================================================

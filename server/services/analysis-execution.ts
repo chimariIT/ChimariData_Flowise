@@ -41,6 +41,7 @@ import { ComputeEngineSelector, type ComputeEngine, type ComputeSelectionResult 
 // import { BusinessAgent } from './business-agent'; // Removed: routed through MCP tool registry
 import { generateStableQuestionId } from '../constants';
 import { resolvePipelineIndustry } from './pipeline-context';
+import { applyQuestionGroundingGate } from './question-grounding-gate';
 
 const ANALYSIS_TYPE_ALIASES: Record<string, string> = {
   descriptive: 'descriptive_statistics',
@@ -800,12 +801,13 @@ export class AnalysisExecutionService {
       // ✅ GAP 5 FIX: Priority 1 - Use request.questionAnswerMapping if provided
       if (request.questionAnswerMapping && request.questionAnswerMapping.length > 0) {
         questionAnswerMapping = request.questionAnswerMapping.map(qam => ({
+          ...qam,
           questionId: qam.questionId,
           questionText: qam.questionText,
           requiredDataElements: qam.requiredDataElements || [],
           recommendedAnalyses: qam.recommendedAnalyses || [],
           transformationsNeeded: qam.transformationsNeeded || [],
-          expectedArtifacts: []
+          expectedArtifacts: qam.expectedArtifacts || []
         }));
         console.log(`📋 [GAP 5 FIX] Using ${questionAnswerMapping.length} question mappings from request (highest priority)`);
       }
@@ -881,6 +883,23 @@ export class AnalysisExecutionService {
             console.log(`📋 [Phase 3 Fix] Generated ${questionAnswerMapping.length} question mappings from businessQuestions (legacy string format)`);
           }
         }
+      }
+
+      try {
+        const requiredElementsForGate = (((project as any)?.journeyProgress?.requirementsDocument?.requiredDataElements)
+          || []) as Array<{ elementId?: string; elementName?: string; dataType?: string; sourceAvailable?: boolean }>;
+        const gateResult = applyQuestionGroundingGate(questionAnswerMapping as any, requiredElementsForGate);
+        questionAnswerMapping = gateResult.mappings as any;
+        console.log(
+          `🧭 [QuestionGroundingGate] total=${gateResult.summary.totalQuestions} answerable=${gateResult.summary.answerableQuestions} partial=${gateResult.summary.partialQuestions} data_gap=${gateResult.summary.dataGapQuestions}`
+        );
+        if (gateResult.summary.blockedByMetric > 0 || gateResult.summary.blockedByDimension > 0) {
+          console.warn(
+            `⚠️ [QuestionGroundingGate] blockers: metric=${gateResult.summary.blockedByMetric}, dimension=${gateResult.summary.blockedByDimension}`
+          );
+        }
+      } catch (gateError: any) {
+        console.warn(`⚠️ [QuestionGroundingGate] non-blocking gate error:`, gateError);
       }
 
       const allInsights: AnalysisInsight[] = [];

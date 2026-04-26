@@ -20,6 +20,7 @@ import { routeStorage, userGreetings } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { ConsultantProvider } from "@/contexts/ConsultantContext";
 import { ServiceHealthBanner } from "@/components/ServiceHealthBanner";
+import { CustomerSupportChatWidget } from "@/components/customer-support-chat-widget";
 
 // Lazy load heavy pages for better performance
 const UserDashboard = lazy(() => import("@/pages/user-dashboard"));
@@ -743,6 +744,7 @@ export default function App() {
                     </Route>
                   </Switch>
                 </Suspense>
+                <CustomerSupportChatWidget />
               </div>
               <Toaster />
             </ProjectProvider>

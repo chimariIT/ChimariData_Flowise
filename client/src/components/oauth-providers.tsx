@@ -4,8 +4,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Separator } from "@/components/ui/separator";
 
 interface OAuthProvider {
+  id?: string;
   name: string;
-  authUrl: string;
+  authUrl?: string;
+  enabled?: boolean;
+  setupHint?: string;
+  missingConfig?: string[];
 }
 
 interface OAuthProvidersProps {
@@ -28,7 +32,22 @@ export function OAuthProviders({
     fetch('/api/auth/providers')
       .then(res => res.json())
       .then(data => {
-        setProviders(Array.isArray(data) ? data : []);
+        if (Array.isArray(data)) {
+          setProviders(data);
+        } else if (Array.isArray(data?.providers)) {
+          setProviders(
+            data.providers.map((provider: any) => ({
+              id: provider?.id,
+              name: provider?.name || provider?.id || 'Unknown',
+              enabled: provider?.enabled !== false,
+              authUrl: typeof provider?.authUrl === 'string' ? provider.authUrl : undefined,
+              setupHint: typeof provider?.setupHint === 'string' ? provider.setupHint : undefined,
+              missingConfig: Array.isArray(provider?.missingConfig) ? provider.missingConfig : undefined,
+            }))
+          );
+        } else {
+          setProviders([]);
+        }
         setLoading(false);
       })
       .catch(err => {
@@ -40,6 +59,16 @@ export function OAuthProviders({
   const handleProviderLogin = (authUrl: string) => {
     window.location.href = authUrl;
   };
+
+  const enabledOAuthProviders = providers.filter((provider) => {
+    const providerId = (provider.id || provider.name || '').toLowerCase();
+    return providerId !== 'email' && provider.enabled !== false && !!provider.authUrl;
+  });
+
+  const hasConfiguredProviderWithoutAuthUrl = providers.some((provider) => {
+    const providerId = (provider.id || provider.name || '').toLowerCase();
+    return providerId !== 'email' && provider.enabled !== false && !provider.authUrl;
+  });
 
   const getProviderIcon = (providerName: string) => {
     switch (providerName.toLowerCase()) {
@@ -120,20 +149,20 @@ export function OAuthProviders({
         </CardHeader>
       )}
       <CardContent className="space-y-4">
-        {providers && providers.length > 0 && providers.map((provider) => (
+        {enabledOAuthProviders.length > 0 && enabledOAuthProviders.map((provider) => (
           <Button
-            key={provider.name}
+            key={provider.id || provider.name}
             variant="outline"
             size="lg"
             className="w-full flex items-center gap-3 h-12"
-            onClick={() => handleProviderLogin(provider.authUrl)}
+            onClick={() => handleProviderLogin(provider.authUrl!)}
           >
             {getProviderIcon(provider.name)}
             Sign in with {getProviderDisplayName(provider.name)}
           </Button>
         ))}
 
-        {providers && providers.length > 0 && (
+        {enabledOAuthProviders.length > 0 && (
           <>
             <div className="relative">
               <div className="absolute inset-0 flex items-center">
@@ -152,14 +181,21 @@ export function OAuthProviders({
           </>
         )}
         
-        {(!providers || providers.length === 0) && (
+        {(enabledOAuthProviders.length === 0) && (
           <div className="text-center py-4">
             <p className="text-sm text-muted-foreground mb-4">
-              OAuth providers are not configured in this environment.
+              {hasConfiguredProviderWithoutAuthUrl
+                ? "OAuth is marked enabled, but no sign-in URL is available in this backend."
+                : "OAuth providers are not configured in this environment."}
             </p>
-            <p className="text-xs text-gray-500">
-              Use email and password authentication above.
-            </p>
+            {providers
+              .filter((provider) => (provider.id || provider.name || '').toLowerCase() !== 'email')
+              .map((provider) => (
+                <p key={provider.id || provider.name} className="text-xs text-gray-500 mb-1">
+                  {provider.setupHint || `${getProviderDisplayName(provider.name)} sign-in is unavailable in this environment.`}
+                </p>
+              ))}
+            <p className="text-xs text-gray-500">You can continue with email and password above.</p>
           </div>
         )}
       </CardContent>

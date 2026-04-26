@@ -14,7 +14,7 @@
  */
 
 import { getMessageBroker } from './message-broker';
-import { realtimeServer } from '../realtime';
+import { realtimeServer } from '../../realtime';
 
 /**
  * Analysis progress event data
@@ -176,24 +176,30 @@ class FixedRealtimeAgentBridge {
    * Register for analysis progress events
    * Components can call this to ensure they receive updates
    */
-  public registerForAnalysisProgress(projectId: string, callback: (event: AnalysisProgressEvent) => void): () => {
+  public registerForAnalysisProgress(projectId: string, callback: (event: AnalysisProgressEvent) => void): () => void {
     console.log(`[RealtimeBridge] Registering for analysis progress for project ${projectId}`);
     const listenerId = `analysis_progress_${projectId}`;
 
     if (this.analysisProgressListeners.has(listenerId)) {
       console.warn('[RealtimeBridge] Listener already registered');
-      return;
+      return () => this.unregisterFromAnalysisProgress(projectId);
     }
 
     this.analysisProgressListeners.add(listenerId);
 
     // Setup a one-time listener on message broker that forwards to callback
     const messageBroker = getMessageBroker();
-    messageBroker.on('analysis:progress', (data: any) => {
+    const listener = (data: any) => {
       if (data.projectId === projectId) {
         callback(data);
       }
-    });
+    };
+    messageBroker.on('analysis:progress', listener);
+
+    return () => {
+      messageBroker.off('analysis:progress', listener);
+      this.unregisterFromAnalysisProgress(projectId);
+    };
   }
 
   /**

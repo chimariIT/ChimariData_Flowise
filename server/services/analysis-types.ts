@@ -126,6 +126,19 @@ export interface QuestionAnalysisMapping {
     artifactType: 'visualization' | 'model' | 'report' | 'dashboard' | 'metric';
     description: string;
   }>;
+  decomposition?: {
+    strategy?: string;
+    layerCount?: number;
+    leafCount?: number;
+    layers?: any[];
+    leafMappings?: any[];
+    reconstruction?: {
+      highLevelQuestion?: string;
+      method?: string;
+    };
+  };
+  answerability?: 'answerable' | 'partial' | 'data_gap';
+  answerabilityBlockers?: string[];
 }
 
 export interface AnalysisResults {

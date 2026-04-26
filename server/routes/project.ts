@@ -70,6 +70,14 @@ const mapProjectJourneyToAgentJourney = (
     }
 };
 
+const PROTECTED_IDENTIFIER_COLUMN_PATTERN = /(^id$|(^|[_\s-])(record|employee|user|customer|client|account|order|invoice|project|team|leader|manager|person|member|staff|org|organization|case|session|transaction|event|row)[_\s-]?id$|identifier$|uuid$|[_\s-]id$)/i;
+
+const isProtectedIdentifierColumn = (columnName: string): boolean => {
+    const normalized = (columnName || '').trim().toLowerCase();
+    if (!normalized) return false;
+    return PROTECTED_IDENTIFIER_COLUMN_PATTERN.test(normalized);
+};
+
 const router = Router();
 
 const extractRowsForTransformation = (dataset: any, project: any): any[] => {
@@ -8770,7 +8778,16 @@ router.post("/:id/apply-pii-exclusions", ensureAuthenticated, async (req, res) =
     try {
         const { id: projectId } = req.params;
         const userId = (req.user as any)?.id;
-        const { excludedColumns = [], anonymizedColumns = [] } = req.body;
+        const requestedExcludedColumns = Array.isArray(req.body?.excludedColumns) ? req.body.excludedColumns : [];
+        const requestedAnonymizedColumns = Array.isArray(req.body?.anonymizedColumns) ? req.body.anonymizedColumns : [];
+        const retainedIdentifierColumns = [
+            ...new Set(
+                [...requestedExcludedColumns, ...requestedAnonymizedColumns]
+                    .filter((column: string) => isProtectedIdentifierColumn(column))
+            )
+        ];
+        const excludedColumns = requestedExcludedColumns.filter((column: string) => !isProtectedIdentifierColumn(column));
+        const anonymizedColumns = requestedAnonymizedColumns.filter((column: string) => !isProtectedIdentifierColumn(column));
 
         console.log(`🔒 [D2 FIX] Apply PII exclusions for project ${projectId}`);
         console.log(`🔒 [D2 FIX] Excluded columns:`, excludedColumns);
@@ -8789,7 +8806,10 @@ router.post("/:id/apply-pii-exclusions", ensureAuthenticated, async (req, res) =
         if (excludedColumns.length === 0 && anonymizedColumns.length === 0) {
             return res.json({
                 success: true,
-                message: "No columns to exclude or anonymize"
+                message: retainedIdentifierColumns.length > 0
+                    ? "Only identifier fields were selected. Those were retained automatically."
+                    : "No columns to exclude or anonymize",
+                retainedIdentifierColumns
             });
         }
 
@@ -8888,7 +8908,8 @@ router.post("/:id/apply-pii-exclusions", ensureAuthenticated, async (req, res) =
             success: true,
             message: `Removed ${excludedColumns.length} columns, anonymized ${anonymizedColumns.length} columns`,
             excludedColumns,
-            anonymizedColumns
+            anonymizedColumns,
+            retainedIdentifierColumns
         });
 
     } catch (error: any) {

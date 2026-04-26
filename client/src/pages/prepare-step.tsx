@@ -133,6 +133,56 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
   // FIX: Prevent infinite re-render loops (API polling storm)
   const isUpdatingRef = useRef(false);
 
+  const ensureProjectId = useCallback(async (): Promise<string | null> => {
+    const existingId = currentProjectId || urlProjectId || localStorage.getItem('currentProjectId');
+    if (existingId) {
+      if (!currentProjectId) {
+        setCurrentProjectId(existingId);
+      }
+      return existingId;
+    }
+
+    try {
+      const trimmedGoal = analysisGoal.trim();
+      const generatedNameBase = trimmedGoal
+        ? trimmedGoal.slice(0, 60)
+        : `${journeyType.replace(/-/g, ' ')} analysis`;
+      const generatedName = generatedNameBase.length >= 60 ? `${generatedNameBase}...` : generatedNameBase;
+      const generatedDescription = trimmedGoal
+        ? `Auto-created from preparation step: ${trimmedGoal}`
+        : `Auto-created from ${journeyType} preparation step`;
+
+      const created = await apiClient.createProject({
+        name: generatedName || 'Analysis Project',
+        description: generatedDescription,
+        journeyType,
+      });
+
+      const createdId = created?.project?.id || created?.id || created?.projectId;
+      if (!createdId) {
+        throw new Error('Project creation did not return an ID');
+      }
+
+      localStorage.setItem('currentProjectId', createdId);
+      setCurrentProjectId(createdId);
+
+      toast({
+        title: 'Project Started',
+        description: 'Your analysis workspace is ready. Continue with your setup below.',
+      });
+
+      return createdId;
+    } catch (error: any) {
+      console.error('Failed to create project from prepare step:', error);
+      toast({
+        title: 'Could Not Start Project',
+        description: error?.message || 'Please try again in a moment.',
+        variant: 'destructive',
+      });
+      return null;
+    }
+  }, [analysisGoal, currentProjectId, journeyType, toast, urlProjectId]);
+
   // Clear prefilled data when starting a new journey (Fix: old data showing in new journeys)
   useEffect(() => {
     const searchParams = new URLSearchParams(window.location.search);
@@ -358,11 +408,17 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
     const timer = setTimeout(async () => {
       setLoadingSuggestions(true);
       try {
-        const data = await apiClient.post('/api/project-manager/suggest-questions', {
+        const suggestionPayload: Record<string, any> = {
           goal: analysisGoal,
           journeyType
-        });
-        setAiSuggestions(data.suggestions || []);
+        };
+        const suggestionProjectId = currentProjectId || urlProjectId || localStorage.getItem('currentProjectId');
+        if (suggestionProjectId) {
+          suggestionPayload.projectId = suggestionProjectId;
+        }
+
+        const data = await apiClient.post('/api/project-manager/suggest-questions', suggestionPayload);
+        setAiSuggestions(data.suggestions || data.questions || []);
       } catch (error) {
         console.error('Failed to fetch AI suggestions:', error);
       } finally {
@@ -371,7 +427,7 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
     }, 1000); // Debounce 1 second
 
     return () => clearTimeout(timer);
-  }, [analysisGoal, journeyType]);
+  }, [analysisGoal, currentProjectId, journeyType, urlProjectId]);
 
   const getJourneyTypeInfo = () => {
     switch (journeyType) {
@@ -479,15 +535,39 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
     if (journeyType === 'business') {
       return analysisGoal.trim() && businessQuestions.trim() && selectedTemplates.length > 0;
     }
-    return analysisGoal.trim() && businessQuestions.trim();
+    return analysisGoal.trim();
+  };
+
+  const buildEffectiveQuestions = () => {
+    const manualQuestions = businessQuestions
+      .split('\n')
+      .map((q, i) => ({ id: `q-${i}`, text: q.trim() }))
+      .filter(q => q.text.length > 0);
+
+    if (manualQuestions.length > 0) {
+      return manualQuestions;
+    }
+
+    // Non-tech fallback: keep users moving even when they only provide goals.
+    const aiQuestionFallbacks = (aiSuggestions || [])
+      .map((q, i) => ({ id: `q-ai-${i}`, text: (q || '').trim() }))
+      .filter(q => q.text.length > 0)
+      .slice(0, 3);
+
+    if (aiQuestionFallbacks.length > 0) {
+      return aiQuestionFallbacks;
+    }
+
+    return [{
+      id: 'q-goal-0',
+      text: `What are the key findings and recommended actions related to: ${analysisGoal.trim()}?`
+    }];
   };
 
   // Generate required data elements from goals/questions
   // FIX: Return the document so callers can use it directly without waiting for state update
   const generateDataRequirements = async (overrides?: { goalOverride?: string; questionsOverride?: string }): Promise<any | null> => {
-    // CRITICAL FIX: Use currentProjectId from useProject hook (most reliable source)
-    // Also check URL and localStorage as fallbacks
-    const projectId = currentProjectId || urlProjectId || localStorage.getItem('currentProjectId');
+    const projectId = await ensureProjectId();
 
     // CRITICAL FIX: Check both state and journeyProgress for goal (state might not be updated yet)
     const effectiveGoal = (overrides?.goalOverride || '').trim() || analysisGoal.trim() || (journeyProgress as any)?.analysisGoal || '';
@@ -1399,11 +1479,10 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
 
                 if (!businessQuestions.trim()) {
                   toast({
-                    title: "Business Questions Required",
-                    description: "Please enter at least one business question before continuing.",
-                    variant: "destructive"
+                    title: "Using Goal-Based Questions",
+                    description: "We will generate your first analysis questions from your goal automatically.",
+                    variant: "default"
                   });
-                  return;
                 }
 
                 // Ambiguity gate: Recommend PM clarification for vague goals
@@ -1439,10 +1518,7 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
                 }
 
                 // Prepare step data
-                const currentQuestions = businessQuestions.split('\n').filter(q => q.trim()).map((q, i) => ({
-                  id: `q-${i}`,
-                  text: q.trim()
-                }));
+                const currentQuestions = buildEffectiveQuestions();
 
                 // FIX: Use the freshly generated document OR the state value (state may be stale)
                 const effectiveRequirementsDoc = generatedDocument || requiredDataElements;
@@ -1471,8 +1547,17 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
                     console.log('📋 [Prepare] Extracted analysis types from analysisPath:', analysisTypesToSave);
                   }
 
+                  const ensuredProjectId = await ensureProjectId();
+                  if (!ensuredProjectId) {
+                    throw new Error('No project ID available. Please refresh and try again.');
+                  }
+
+                  const hasUploadedData =
+                    ((journeyProgress?.uploadedDatasetIds?.length ?? 0) > 0) ||
+                    ((journeyProgress?.joinedData?.preview?.length ?? 0) > 0);
+
                   const progressPayload: any = {
-                    currentStep: 'data-verification',
+                    currentStep: hasUploadedData ? 'data-verification' : 'data',
                     completedSteps: [...(journeyProgress?.completedSteps || []), 'prepare'],
                     analysisGoal: analysisGoal.trim(),
                     userQuestions: currentQuestions,
@@ -1504,7 +1589,7 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
                   }
 
                   // FIX: Get the most reliable projectId source (state may be stale after initial mount)
-                  const reliableProjectId = currentProjectId || urlProjectId || localStorage.getItem('currentProjectId');
+                  const reliableProjectId = currentProjectId || ensuredProjectId || urlProjectId || localStorage.getItem('currentProjectId');
 
                   console.log('📋 [Navigation] Sending progressPayload to backend:', {
                     hasRequirementsDocument: !!progressPayload.requirementsDocument,
@@ -1513,10 +1598,6 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
                     keys: Object.keys(progressPayload),
                     projectId: reliableProjectId
                   });
-
-                  if (!reliableProjectId) {
-                    throw new Error('No project ID available. Please refresh the page and try again.');
-                  }
 
                   // FIX: Pass _projectIdOverride to handle stale closure in useProject hook
                   const saveResult = await updateProgressAsync({ ...progressPayload, _projectIdOverride: reliableProjectId });
@@ -1551,6 +1632,11 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
                     return; // Block navigation
                   }
 
+                  if (!hasUploadedData) {
+                    setLocation(`/journeys/${journeyType}/data?projectId=${reliableProjectId}`);
+                    return;
+                  }
+
                   // Navigate to next step (only after data is confirmed persisted)
                   if (onNext) {
                     console.log('✅ [Navigation] Verified persistence, proceeding to Verification step');
@@ -1566,7 +1652,7 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
                 }
               }}
               className="ml-auto bg-blue-600 hover:bg-blue-700"
-              disabled={!analysisGoal.trim() || !businessQuestions.trim() || loadingDataElements || isUpdating}
+              disabled={!analysisGoal.trim() || loadingDataElements || isUpdating}
             >
               {loadingDataElements ? (
                 <>

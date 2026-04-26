@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,9 +12,7 @@ import {
   BarChart3,
   CheckCircle,
   Circle,
-  Settings,
   DollarSign,
-  FolderOpen,
   Receipt,
   MessageCircle,
   Lightbulb,
@@ -39,6 +37,7 @@ interface JourneyStep {
   route: string;
   icon: any;
   completed: boolean;
+  stageIds?: string[];
 }
 
 interface JourneyWizardProps {
@@ -50,79 +49,165 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
   const [, setLocation] = useLocation();
   const [transitioning, setTransitioning] = useState(false);
 
-  // User Journey Flow (8 steps - CONSOLIDATED):
-  // 1. Data Upload & Project Setup -> 2. Analysis Preparation -> 3. Data Verification ->
-  // 4. Data Transformation -> 5. Analysis Planning -> 6. Execution ->
-  // 7. Billing and Payment -> 8. Dashboard (Results)
-  const steps: JourneyStep[] = [
-    {
-      id: 'data',
-      title: '1. Data Upload & Setup',
-      description: 'Create project, upload files, PII review, join datasets',
-      route: `/journeys/${journeyType}/data`,
-      icon: Database,
-      completed: false
-    },
-    {
-      id: 'prepare',
-      title: '2. Analysis Preparation',
-      description: 'Define goals, questions, get analysis recommendations',
-      route: `/journeys/${journeyType}/prepare`,
-      icon: Target,
-      completed: false
-    },
-    {
-      id: 'data-verification',
-      title: '3. Data Verification',
-      description: 'Map data elements to columns, confirm quality',
-      route: `/journeys/${journeyType}/data-verification`,
-      icon: CheckCircle,
-      completed: false
-    },
-    {
-      id: 'data-transformation',
-      title: '4. Data Transformation',
-      description: 'Transform data for each planned analysis',
-      route: `/journeys/${journeyType}/data-transformation`,
-      icon: RefreshCw,
-      completed: false
-    },
-    {
-      id: 'plan',
-      title: '5. Analysis Plan',
-      description: 'Review execution plan, expected artifacts, costs',
-      route: `/journeys/${journeyType}/plan`,
-      icon: Lightbulb,
-      completed: false
-    },
-    {
-      id: 'execute',
-      title: '6. Execution',
-      description: 'Run analyses with approval checkpoints',
-      route: `/journeys/${journeyType}/execute`,
-      icon: BarChart3,
-      completed: false
-    },
-    {
-      id: 'pricing',
-      title: '7. Billing & Payment',
-      description: 'Preview results, review costs, complete payment',
-      route: `/journeys/${journeyType}/pricing`,
-      icon: DollarSign,
-      completed: false
-    },
-    {
-      id: 'results',
-      title: '8. Dashboard',
-      description: 'View all results, artifacts, and exports',
-      route: `/journeys/${journeyType}/results`,
-      icon: Receipt,
-      completed: false
-    }
-  ];
+  const isSimplifiedJourney = ['guided', 'non-tech', 'business'].includes(journeyType);
 
-  const currentStepIndex = steps.findIndex(step => step.id === currentStage);
+  const steps: JourneyStep[] = isSimplifiedJourney
+    ? [
+        {
+          id: 'goals-data',
+          title: 'Goals & Data',
+          description: 'Set goals, upload files, confirm privacy fields',
+          route: `/journeys/${journeyType}/data`,
+          icon: Database,
+          completed: false,
+          stageIds: ['data', 'prepare', 'data-verification', 'data-transformation'],
+        },
+        {
+          id: 'review-pay',
+          title: 'Review & Pay',
+          description: 'Review what we will answer and confirm payment',
+          route: `/journeys/${journeyType}/pricing`,
+          icon: DollarSign,
+          completed: false,
+          stageIds: ['plan', 'pricing', 'preview'],
+        },
+        {
+          id: 'running-analysis',
+          title: 'Running Analysis',
+          description: 'We run your analysis and show progress',
+          route: `/journeys/${journeyType}/execute`,
+          icon: BarChart3,
+          completed: false,
+          stageIds: ['execute'],
+        },
+        {
+          id: 'results',
+          title: 'Results',
+          description: 'View insights, Q&A, and downloads',
+          route: `/journeys/${journeyType}/results`,
+          icon: Receipt,
+          completed: false,
+          stageIds: ['results'],
+        },
+      ]
+    : [
+        {
+          id: 'data',
+          title: '1. Data Upload & Setup',
+          description: 'Create project, upload files, review privacy fields, join datasets',
+          route: `/journeys/${journeyType}/data`,
+          icon: Database,
+          completed: false,
+        },
+        {
+          id: 'prepare',
+          title: '2. Analysis Preparation',
+          description: 'Define goals, questions, get analysis recommendations',
+          route: `/journeys/${journeyType}/prepare`,
+          icon: Target,
+          completed: false,
+        },
+        {
+          id: 'data-verification',
+          title: '3. Data Verification',
+          description: 'Map data elements to columns, confirm quality',
+          route: `/journeys/${journeyType}/data-verification`,
+          icon: CheckCircle,
+          completed: false,
+        },
+        {
+          id: 'data-transformation',
+          title: '4. Data Transformation',
+          description: 'Transform data for each planned analysis',
+          route: `/journeys/${journeyType}/data-transformation`,
+          icon: RefreshCw,
+          completed: false,
+        },
+        {
+          id: 'plan',
+          title: '5. Analysis Plan',
+          description: 'Review execution plan, expected artifacts, costs',
+          route: `/journeys/${journeyType}/plan`,
+          icon: Lightbulb,
+          completed: false,
+        },
+        {
+          id: 'execute',
+          title: '6. Execution',
+          description: 'Run analyses with approval checkpoints',
+          route: `/journeys/${journeyType}/execute`,
+          icon: BarChart3,
+          completed: false,
+        },
+        {
+          id: 'pricing',
+          title: '7. Billing & Payment',
+          description: 'Preview results, review costs, complete payment',
+          route: `/journeys/${journeyType}/pricing`,
+          icon: DollarSign,
+          completed: false,
+          stageIds: ['pricing', 'preview'],
+        },
+        {
+          id: 'results',
+          title: '8. Dashboard',
+          description: 'View all results, artifacts, and exports',
+          route: `/journeys/${journeyType}/results`,
+          icon: Receipt,
+          completed: false,
+        },
+      ];
+
+  const isActiveStep = (step: JourneyStep) =>
+    step.stageIds?.length ? step.stageIds.includes(currentStage) : step.id === currentStage;
+
+  const matchedStepIndex = steps.findIndex((step) => isActiveStep(step));
+  const currentStepIndex = matchedStepIndex >= 0 ? matchedStepIndex : 0;
   const progress = ((currentStepIndex + 1) / steps.length) * 100;
+
+  const canonicalStageSequence = ['data', 'prepare', 'data-verification', 'data-transformation', 'plan', 'execute', 'pricing', 'results'];
+  const normalizedCurrentStage = currentStage === 'preview' ? 'pricing' : currentStage;
+  const canonicalStageIndex = canonicalStageSequence.indexOf(normalizedCurrentStage);
+  const activeStepId = steps[currentStepIndex]?.id;
+
+  const currentFocusMessage = isSimplifiedJourney
+    ? (() => {
+        switch (activeStepId) {
+          case 'goals-data':
+            return 'Describe your goals, upload your data, and confirm privacy fields. Record link fields stay included automatically.';
+          case 'review-pay':
+            return 'Review what we will deliver, then confirm payment to start analysis.';
+          case 'running-analysis':
+            return 'Your AI data scientist is running the analysis now. Progress updates appear here automatically.';
+          case 'results':
+            return 'Review insights, ask follow-up questions, and download outputs for your team.';
+          default:
+            return 'Follow each step to complete your analysis.';
+        }
+      })()
+    : (() => {
+        switch (currentStage) {
+          case 'data':
+            return 'Create your project, upload files, review privacy fields, and approve joined dataset';
+          case 'prepare':
+            return 'Define your analysis goals and get AI-powered recommendations';
+          case 'data-verification':
+            return 'Map data elements to columns and confirm data quality';
+          case 'data-transformation':
+            return 'Transform data for each planned analysis';
+          case 'plan':
+            return 'Review the execution plan, expected artifacts, and cost estimates';
+          case 'execute':
+            return 'Run analyses with approval checkpoints at each step';
+          case 'pricing':
+          case 'preview':
+            return 'Preview results, review final costs, and complete payment';
+          case 'results':
+            return 'View all results, artifacts, and export options';
+          default:
+            return 'Follow each step to complete your analysis.';
+        }
+      })();
 
   const getJourneyTypeTitle = (type: string) => {
     switch (type) {
@@ -151,19 +236,19 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
   };
 
   const handleNext = () => {
-    if (currentStepIndex < steps.length - 1) {
+    if (canonicalStageIndex >= 0 && canonicalStageIndex < canonicalStageSequence.length - 1) {
       setTransitioning(true);
-      const nextStep = steps[currentStepIndex + 1];
-      setLocation(nextStep.route);
+      const nextStage = canonicalStageSequence[canonicalStageIndex + 1];
+      setLocation(`/journeys/${journeyType}/${nextStage}`);
       setTimeout(() => setTransitioning(false), 300);
     }
   };
 
   const handlePrevious = () => {
-    if (currentStepIndex > 0) {
+    if (canonicalStageIndex > 0) {
       setTransitioning(true);
-      const prevStep = steps[currentStepIndex - 1];
-      setLocation(prevStep.route);
+      const previousStage = canonicalStageSequence[canonicalStageIndex - 1];
+      setLocation(`/journeys/${journeyType}/${previousStage}`);
       setTimeout(() => setTransitioning(false), 300);
     }
   };
@@ -248,14 +333,7 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
                 <span className="text-sm font-medium text-blue-900">Current Focus</span>
               </div>
               <p className="text-sm text-blue-700">
-                {currentStage === 'data' && 'Create your project, upload files, review PII, and approve joined dataset'}
-                {currentStage === 'prepare' && 'Define your analysis goals and get AI-powered recommendations'}
-                {currentStage === 'data-verification' && 'Map data elements to columns and confirm data quality'}
-                {currentStage === 'data-transformation' && 'Transform data for each planned analysis'}
-                {currentStage === 'plan' && 'Review the execution plan, expected artifacts, and cost estimates'}
-                {currentStage === 'execute' && 'Run analyses with approval checkpoints at each step'}
-                {currentStage === 'pricing' && 'Preview results, review final costs, and complete payment'}
-                {currentStage === 'results' && 'View all results, artifacts, and export options'}
+                {currentFocusMessage}
               </p>
             </div>
           </div>
@@ -264,7 +342,7 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
           <div className="grid grid-cols-2 md:grid-cols-3 lg:flex lg:items-center gap-2 lg:gap-4">
             {steps.map((step, index) => {
               const Icon = step.icon;
-              const isActive = step.id === currentStage;
+              const isActive = isActiveStep(step);
               const isCompleted = index < currentStepIndex;
               const isAccessible = index <= currentStepIndex;
 
@@ -324,16 +402,16 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
       {/* Main Content Area */}
       <div className="max-w-4xl mx-auto px-4 py-8">
         {/* Step-specific information */}
-        {currentStage === 'pricing' && (
+        {(currentStage === 'pricing' || currentStage === 'preview') && (
           <div className="mb-6">
             <Card className="border-green-200 bg-green-50">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-green-900">
                   <DollarSign className="w-5 h-5" />
-                  Ready for Pricing
+                  Review & Pay
                 </CardTitle>
                 <CardDescription className="text-green-700">
-                  All analysis requirements are now defined. Review the final pricing before proceeding.
+                  Review readiness, pricing, and payment details before proceeding.
                 </CardDescription>
               </CardHeader>
             </Card>
@@ -434,7 +512,7 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
             />
           )}
 
-          {currentStage === 'pricing' && (
+          {(currentStage === 'pricing' || currentStage === 'preview') && (
             <PricingStep
               journeyType={journeyType}
               onNext={handleNext}
@@ -456,7 +534,7 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
           <Button
             variant="outline"
             onClick={handlePrevious}
-            disabled={currentStepIndex === 0}
+            disabled={canonicalStageIndex <= 0}
             data-testid="button-previous-step"
           >
             <ChevronLeft className="w-4 h-4 mr-2" />
@@ -475,7 +553,7 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
 
           <Button
             onClick={handleNext}
-            disabled={currentStepIndex === steps.length - 1}
+            disabled={canonicalStageIndex < 0 || canonicalStageIndex === canonicalStageSequence.length - 1}
             data-testid="button-next-step"
           >
             Next

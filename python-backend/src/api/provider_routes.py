@@ -19,7 +19,7 @@ from ..services.llm_providers import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1/providers", tags=["providers"])
+router = APIRouter(prefix="/providers", tags=["providers"])
 
 
 # ============================================================================

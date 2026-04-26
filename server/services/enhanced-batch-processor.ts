@@ -15,7 +15,7 @@
  */
 
 import { EventEmitter } from 'events';
-import { Worker, isMainThread, parentPort, workerData } from 'worker_threads';
+import type { Worker } from 'worker_threads';
 import { Transform, Readable, Writable } from 'stream';
 import { pipeline } from 'stream/promises';
 import { nanoid } from 'nanoid';
@@ -352,55 +352,11 @@ export class EnhancedBatchProcessor extends EventEmitter {
    * Process job using worker threads
    */
   private async processJobWithWorkers(job: BatchJob): Promise<void> {
-    const batches = this.createBatches(job.data, job.options.batchSize!);
-    const workerPromises: Promise<any>[] = [];
-    
-    for (let i = 0; i < batches.length; i++) {
-      const batch = batches[i];
-      
-      const workerPromise = new Promise((resolve, reject) => {
-        const worker = new Worker(__filename, {
-          workerData: {
-            batch,
-            batchIndex: i,
-            totalBatches: batches.length,
-            processorCode: job.processor.toString(),
-            jobId: job.id
-          }
-        });
-
-        worker.on('message', (result) => {
-          resolve(result);
-        });
-
-        worker.on('error', (error) => {
-          reject(error);
-        });
-
-        worker.on('exit', (code) => {
-          if (code !== 0) {
-            reject(new Error(`Worker stopped with exit code ${code}`));
-          }
-        });
-
-        this.workers.set(`${job.id}-${i}`, worker);
-      });
-
-      workerPromises.push(workerPromise);
-    }
-
-    const results = await Promise.allSettled(workerPromises);
-    
-    // Aggregate worker results
-    for (const result of results) {
-      if (result.status === 'fulfilled') {
-        job.results.successful.push(...result.value.successful);
-        job.results.failed.push(...result.value.failed);
-      }
-    }
-
-    job.status = 'completed';
-    this.emit('job_completed', { jobId: job.id, job });
+    console.warn(
+      `Worker-thread batch processing is disabled for job ${job.id}; ` +
+        'dynamic processor serialization is unsafe. Falling back to main-thread processing.'
+    );
+    await this.processJobInMainThread(job);
   }
 
   /**
@@ -659,35 +615,6 @@ export class EnhancedBatchProcessor extends EventEmitter {
     process.on('SIGTERM', shutdown);
     process.on('SIGINT', shutdown);
   }
-}
-
-// Worker thread code
-if (!isMainThread && parentPort) {
-  const { batch, batchIndex, totalBatches, processorCode, jobId } = workerData;
-  
-  (async () => {
-    try {
-      // Reconstruct the processor function
-      const processor = eval(`(${processorCode})`);
-      
-      // Process the batch
-      const results = await processor(batch, batchIndex, { totalBatches, jobId });
-      
-      parentPort!.postMessage({
-        successful: results,
-        failed: []
-      });
-    } catch (error) {
-      parentPort!.postMessage({
-        successful: [],
-        failed: batch.map((item: any, index: number) => ({
-          item,
-          error: (error as Error).message,
-          index: batchIndex * batch.length + index
-        }))
-      });
-    }
-  })();
 }
 
 // Export singleton instance

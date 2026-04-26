@@ -16,7 +16,7 @@ from ..auth.middleware import get_current_user, User
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1", tags=["results"])
+router = APIRouter(tags=["results"])
 
 
 # ============================================================================

@@ -51,6 +51,19 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
     },
     staleTime: 30000,
   });
+  const {
+    data: webhookDiagnostics,
+    isLoading: webhookDiagnosticsLoading,
+    error: webhookDiagnosticsError,
+    refetch: refetchWebhookDiagnostics
+  } = useQuery({
+    queryKey: ['/api/payment/webhook/diagnostics'],
+    queryFn: async () => {
+      const response = await apiClient.get('/api/payment/webhook/diagnostics');
+      return response?.data || response;
+    },
+    staleTime: 30000,
+  });
 
   const adminSections = [
     {
@@ -134,6 +147,24 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
       value: healthLoading ? "..." : (health?.services?.admin_service === "up" ? "Operational" : "Unknown"),
       icon: Activity,
       color: health?.services?.admin_service === "up" ? "text-emerald-600" : "text-red-600"
+    },
+    {
+      title: "Webhook Signature",
+      value: webhookDiagnosticsLoading
+        ? "..."
+        : webhookDiagnostics?.signatureValidationEnabled
+          ? "Enabled"
+          : "Disabled",
+      icon: Shield,
+      color: webhookDiagnostics?.signatureValidationEnabled ? "text-emerald-600" : "text-amber-600"
+    },
+    {
+      title: "Recent Webhook Projects",
+      value: webhookDiagnosticsLoading
+        ? "..."
+        : String(webhookDiagnostics?.recentProjectWebhookActivity?.length || 0),
+      icon: DollarSign,
+      color: "text-indigo-600"
     }
   ];
 
@@ -205,6 +236,98 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
             ))}
           </div>
         </div>
+
+        {/* Stripe Webhook Validation */}
+        <Card className="mb-8">
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <Shield className="h-5 w-5" />
+                  Stripe Webhook Validation
+                </CardTitle>
+                <CardDescription>
+                  Signed event readiness and recent webhook activity
+                </CardDescription>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => refetchWebhookDiagnostics()}
+                disabled={webhookDiagnosticsLoading}
+              >
+                {webhookDiagnosticsLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4" />
+                )}
+                <span className="ml-2">Refresh</span>
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {webhookDiagnosticsError && (
+              <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+                Could not load webhook diagnostics.
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+              <div className="p-3 border rounded-lg">
+                <p className="text-xs text-gray-500">Stripe Configured</p>
+                <p className="font-semibold mt-1">
+                  {webhookDiagnostics?.stripeConfigured ? "Yes" : "No"}
+                </p>
+              </div>
+              <div className="p-3 border rounded-lg">
+                <p className="text-xs text-gray-500">Webhook Secret</p>
+                <p className="font-semibold mt-1">
+                  {webhookDiagnostics?.webhookSecretConfigured ? "Configured" : "Missing"}
+                </p>
+              </div>
+              <div className="p-3 border rounded-lg">
+                <p className="text-xs text-gray-500">Signature Verification</p>
+                <p className="font-semibold mt-1">
+                  {webhookDiagnostics?.signatureValidationEnabled ? "Enabled" : "Disabled"}
+                </p>
+              </div>
+              <div className="p-3 border rounded-lg">
+                <p className="text-xs text-gray-500">Stripe Mode</p>
+                <p className="font-semibold mt-1 capitalize">
+                  {webhookDiagnostics?.stripeMode || "unknown"}
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-gray-700">Recent Webhook Project Activity</p>
+              {(webhookDiagnostics?.recentProjectWebhookActivity?.length || 0) === 0 ? (
+                <p className="text-sm text-gray-500">No webhook activity recorded yet.</p>
+              ) : (
+                <div className="space-y-2">
+                  {webhookDiagnostics.recentProjectWebhookActivity.slice(0, 5).map((item: any) => (
+                    <div key={item.projectId} className="p-3 border rounded-lg">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-medium text-gray-900">
+                          {item.projectName || item.projectId}
+                        </p>
+                        <Badge variant="outline">{item.paymentStatus || "unknown"}</Badge>
+                      </div>
+                      <p className="text-xs text-gray-600 mt-1">
+                        Event: {item.lastWebhookEventType || "n/a"} • Processed IDs: {item.processedEventCount || 0}
+                      </p>
+                      {item.lastWebhookReceivedAt && (
+                        <p className="text-xs text-gray-500 mt-1">
+                          Last received: {new Date(item.lastWebhookReceivedAt).toLocaleString()}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
 
         {/* Admin Sections */}
         <div className="mb-8">

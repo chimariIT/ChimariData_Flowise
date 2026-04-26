@@ -27,7 +27,7 @@ from sqlalchemy import select, delete, func
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1/semantic", tags=["semantic"])
+router = APIRouter(prefix="/semantic", tags=["semantic"])  # /semantic/* routes
 
 
 # ============================================================================

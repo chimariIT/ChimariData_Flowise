@@ -20,6 +20,7 @@ setup(
         "pydantic>=2.5.0",
         "langchain>=0.1.0",
         "langgraph>=0.0.20",
+        "deepagents>=0.5.0",
         "openai>=1.10.0",
         "pandas>=2.1.4",
         "numpy>=1.26.0",

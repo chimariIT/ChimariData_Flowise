@@ -27,7 +27,7 @@ import MultiAgentCheckpoint from './multi-agent-checkpoint';
 interface AgentCheckpoint {
   id: string;
   projectId: string;
-  agentType: 'project_manager' | 'technical_ai' | 'business' | 'data_engineer' | 'data_scientist';
+  agentType: 'project_manager' | 'technical_ai' | 'business' | 'data_engineer' | 'data_scientist' | 'researcher' | 'customer_support';
   stepName: string;
   status: 'pending' | 'in_progress' | 'waiting_approval' | 'approved' | 'completed' | 'rejected';
   message: string;
@@ -53,10 +53,12 @@ const statusConfig = {
 
 const agentConfig = {
   project_manager: { name: 'Project Manager', icon: Bot, color: 'text-purple-600' },
-  technical_ai: { name: 'Technical AI', icon: Bot, color: 'text-blue-600' },
+  technical_ai: { name: 'Data Scientist', icon: Bot, color: 'text-blue-600' },
   business: { name: 'Business Analyst', icon: Bot, color: 'text-green-600' },
   data_engineer: { name: 'Data Engineer', icon: Bot, color: 'text-orange-600' },
   data_scientist: { name: 'Data Scientist', icon: Bot, color: 'text-cyan-600' },
+  researcher: { name: 'Researcher', icon: Bot, color: 'text-indigo-600' },
+  customer_support: { name: 'Customer Support', icon: Bot, color: 'text-slate-600' },
 };
 
 export default function AgentCheckpoints({ projectId }: AgentCheckpointsProps) {

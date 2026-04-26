@@ -293,7 +293,7 @@ class BillingService:
             "pending_revenue": pending_revenue,
             "overdue_invoices_count": len([inv for inv in overdue_invoices if inv["status"] in ["pending", "failed"]]),
             "active_campaigns_count": len(campaigns),
-            "total_invoices": len(await self.invoice_repo.find_by_user("any_user_placeholder")),  # Would need actual count
+            "total_invoices": await self.invoice_repo.count(),
             "revenue_this_month": revenue,  # Simplified - would filter by month
         }
 

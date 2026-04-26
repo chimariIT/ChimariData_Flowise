@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -26,15 +26,43 @@ interface PIIDetectionDialogProps {
   };
 }
 
+const IDENTIFIER_NAME_PATTERN = /(^id$|(^|[_\s-])(record|employee|user|customer|client|account|order|invoice|project|team|leader|manager|person|member|staff|org|organization|case|session|transaction|event|row)[_\s-]?id$|identifier$|uuid$|[_\s-]id$)/i;
+
+const isRecordIdentifierColumn = (columnName: string): boolean => {
+  const normalized = (columnName || "").trim().toLowerCase();
+  if (!normalized) return false;
+  return IDENTIFIER_NAME_PATTERN.test(normalized);
+};
+
 export function PIIDetectionDialog({ isOpen, onClose, onDecision, piiResult, projectId, onToolkitApplied, fileName }: PIIDetectionDialogProps) {
   const [selectedColumns, setSelectedColumns] = useState<string[]>([]);
   const [anonymizeData, setAnonymizeData] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [showAnonymizationToolkit, setShowAnonymizationToolkit] = useState(false);
 
+  const detectedColumns = useMemo(
+    () => (piiResult?.detectedPII || []).map((pii) => pii?.column || "").filter(Boolean),
+    [piiResult]
+  );
+
+  const requiredIdentifierColumns = useMemo(
+    () => detectedColumns.filter((column) => isRecordIdentifierColumn(column)),
+    [detectedColumns]
+  );
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setSelectedColumns(requiredIdentifierColumns);
+    setAnonymizeData(false);
+    setShowDetails(false);
+  }, [isOpen, requiredIdentifierColumns]);
+
   if (!isOpen) return null;
 
   const handleColumnToggle = (column: string) => {
+    if (requiredIdentifierColumns.includes(column)) {
+      return;
+    }
     setSelectedColumns(prev =>
       prev.includes(column)
         ? prev.filter(c => c !== column)
@@ -43,7 +71,10 @@ export function PIIDetectionDialog({ isOpen, onClose, onDecision, piiResult, pro
   };
 
   const handleProceed = () => {
-    onDecision(true, anonymizeData, selectedColumns);
+    const selectedWithRequiredIdentifiers = [
+      ...new Set([...selectedColumns, ...requiredIdentifierColumns]),
+    ];
+    onDecision(true, anonymizeData, selectedWithRequiredIdentifiers);
   };
 
   const handleCancel = () => {
@@ -80,12 +111,12 @@ export function PIIDetectionDialog({ isOpen, onClose, onDecision, piiResult, pro
             <div className="flex items-center gap-3">
               <AlertTriangle className="w-6 h-6 text-yellow-600" />
               <div>
-                <CardTitle className="text-xl">Personal Information Detected</CardTitle>
+                <CardTitle className="text-xl">Data Privacy Check</CardTitle>
                 <CardDescription>
                   {fileName ? (
-                    <>We found potentially sensitive information in <strong>{fileName}</strong></>
+                    <>We found fields in <strong>{fileName}</strong> that could identify specific people.</>
                   ) : (
-                    <>We found potentially sensitive information in your dataset</>
+                    <>We found fields in your data that could identify specific people.</>
                   )}
                 </CardDescription>
               </div>
@@ -99,7 +130,7 @@ export function PIIDetectionDialog({ isOpen, onClose, onDecision, piiResult, pro
         <CardContent className="space-y-6">
           {/* Risk Level */}
           <div className="flex items-center gap-2">
-            <span className="font-medium">Risk Level:</span>
+            <span className="font-medium">Privacy risk:</span>
             <Badge className={getRiskColor(piiResult?.riskLevel)}>
               {(piiResult?.riskLevel || 'UNKNOWN').toUpperCase()}
             </Badge>
@@ -107,7 +138,7 @@ export function PIIDetectionDialog({ isOpen, onClose, onDecision, piiResult, pro
 
           {/* Detected PII Summary */}
           <div>
-            <h3 className="font-semibold mb-3">Detected Personal Information</h3>
+            <h3 className="font-semibold mb-3">Columns that could identify individuals</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {(piiResult?.detectedPII || []).map((pii, index) => (
                 <Card key={index} className="border-l-4 border-l-yellow-500">
@@ -160,7 +191,7 @@ export function PIIDetectionDialog({ isOpen, onClose, onDecision, piiResult, pro
           {/* Recommendations */}
           {(piiResult?.recommendations || []).length > 0 && (
             <div>
-              <h3 className="font-semibold mb-2">Recommendations</h3>
+              <h3 className="font-semibold mb-2">Recommended privacy actions</h3>
               <ul className="space-y-1 text-sm text-gray-600">
                 {(piiResult?.recommendations || []).map((rec, index) => (
                   <li key={index} className="flex items-start gap-2">
@@ -172,22 +203,50 @@ export function PIIDetectionDialog({ isOpen, onClose, onDecision, piiResult, pro
             </div>
           )}
 
+          {/* Required identifiers */}
+          <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
+            <h3 className="font-semibold mb-2 text-blue-900">Record link fields (required)</h3>
+            <p className="text-sm text-blue-700 mb-3">
+              These fields keep records connected across files and steps, so they stay included.
+            </p>
+            {requiredIdentifierColumns.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {requiredIdentifierColumns.map((column) => (
+                  <Badge key={column} className="bg-blue-100 text-blue-800 border-blue-300" variant="outline">
+                    {column}
+                  </Badge>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-blue-700">
+                No identifier field was detected in this privacy set.
+              </p>
+            )}
+          </div>
+
           {/* Column Selection */}
           <div>
-            <h3 className="font-semibold mb-3">Select Columns to Include</h3>
+            <h3 className="font-semibold mb-3">Choose privacy fields to include (only if needed)</h3>
             <p className="text-sm text-gray-600 mb-4">
-              Choose which columns containing PII you want to include in your analysis:
+              By default, these fields are excluded. Select only the ones needed for your questions.
             </p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
               {(piiResult?.detectedPII || []).map((pii, index) => (
                 <div key={index} className="flex items-center space-x-2">
+                  {requiredIdentifierColumns.includes(pii?.column || '') ? (
+                    <Badge variant="outline" className="text-xs bg-blue-50 text-blue-700 border-blue-200">
+                      Required
+                    </Badge>
+                  ) : null}
                   <Checkbox
                     id={`pii-${index}`}
                     checked={selectedColumns.includes(pii?.column || '')}
+                    disabled={requiredIdentifierColumns.includes(pii?.column || '')}
                     onCheckedChange={() => handleColumnToggle(pii?.column || '')}
                   />
                   <Label htmlFor={`pii-${index}`} className="text-sm">
                     {pii?.column || 'Unknown'}
+                    {requiredIdentifierColumns.includes(pii?.column || '') ? ' (record link field)' : ''}
                   </Label>
                 </div>
               ))}
@@ -207,18 +266,18 @@ export function PIIDetectionDialog({ isOpen, onClose, onDecision, piiResult, pro
                 }}
               />
               <Label htmlFor="anonymize" className="font-medium">
-                Anonymize sensitive data
+                Mask included privacy fields
               </Label>
             </div>
             <p className="text-sm text-gray-600 ml-6">
-              Apply anonymization techniques to mask sensitive information while preserving data utility for analysis.
+              Apply masking to included privacy fields while keeping the data useful for analysis.
             </p>
           </div>
 
           {/* Actions */}
           <div className="flex justify-end gap-3 pt-4 border-t">
             <Button variant="outline" onClick={handleCancel}>
-              Cancel Upload
+              Use Safe Defaults
             </Button>
             <Button
               variant="outline"
@@ -226,10 +285,10 @@ export function PIIDetectionDialog({ isOpen, onClose, onDecision, piiResult, pro
               disabled={!projectId}
             >
               <Settings className="h-4 w-4 mr-2" />
-              Advanced Anonymization
+              Advanced Privacy
             </Button>
             <Button onClick={handleProceed}>
-              Proceed with Analysis
+              Confirm & Continue
             </Button>
           </div>
         </CardContent>

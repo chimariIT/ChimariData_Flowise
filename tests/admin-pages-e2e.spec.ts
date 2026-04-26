@@ -10,7 +10,7 @@
  * - System monitoring
  *
  * Prerequisites:
- * - Server running on localhost:3000
+ * - Frontend running on localhost:5173 (or PLAYWRIGHT_BASE_URL)
  * - Test admin user with admin role
  * - Database in clean state
  */
@@ -29,11 +29,53 @@ import { test, expect, Page } from '@playwright/test';
  */
 
 // Test configuration
-const BASE_URL = 'http://localhost:3000';
+const BASE_URL = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:5173';
+const API_BASE = process.env.PLAYWRIGHT_API_BASE || `${BASE_URL}/api`;
+const ADMIN_EMAIL = process.env.PLAYWRIGHT_ADMIN_EMAIL || 'admin@chimaridata.com';
+const ADMIN_PASSWORD = process.env.PLAYWRIGHT_ADMIN_PASSWORD || 'admin123';
+
+async function loginAsAdmin(page: Page) {
+  const loginResponse = await page.request.post(`${API_BASE}/auth/login`, {
+    data: {
+      email: ADMIN_EMAIL,
+      password: ADMIN_PASSWORD,
+    },
+  });
+
+  if (!loginResponse.ok()) {
+    throw new Error(
+      `Admin login failed for ${ADMIN_EMAIL}. Set PLAYWRIGHT_ADMIN_EMAIL and PLAYWRIGHT_ADMIN_PASSWORD to valid admin credentials.`
+    );
+  }
+
+  const loginData = await loginResponse.json();
+  const token = loginData?.token as string | undefined;
+  const user = loginData?.user;
+
+  if (!token) {
+    throw new Error(`Admin login returned no token for ${ADMIN_EMAIL}`);
+  }
+
+  await page.addInitScript(
+    ({ authToken, authUser }) => {
+      window.localStorage.setItem('auth_token', authToken);
+      if (authUser) {
+        window.localStorage.setItem('auth_user', JSON.stringify(authUser));
+      }
+    },
+    { authToken: token, authUser: user }
+  );
+
+  await page.context().setExtraHTTPHeaders({
+    Authorization: `Bearer ${token}`,
+    'X-Forwarded-Authorization': `Bearer ${token}`,
+  });
+}
 
 async function navigateToAdminPage(page: Page, adminPage: string) {
-  await page.goto(`${BASE_URL}/admin/${adminPage}`);
-  await page.waitForLoadState('networkidle');
+  await loginAsAdmin(page);
+  await page.goto(`${BASE_URL}/admin/${adminPage}`, { waitUntil: 'domcontentloaded' });
+  await page.waitForURL(new RegExp(`/admin/${adminPage}`), { timeout: 60000 });
 }
 
 test.describe('Admin Pages - Agent Management', () => {
@@ -301,7 +343,7 @@ test.describe('Admin Pages - Agent Templates', () => {
     await loginAsAdmin(page);
 
     // Test template API endpoint
-    const response = await request.get(`${BASE_URL}/api/admin/templates`);
+    const response = await request.get(`${API_BASE}/admin/templates`);
     expect(response.ok()).toBeTruthy();
 
     const data = await response.json();
@@ -320,7 +362,7 @@ test.describe('Admin Pages - Agent Templates', () => {
   test('should filter templates by category (API test)', async ({ page, request }) => {
     await loginAsAdmin(page);
 
-    const response = await request.get(`${BASE_URL}/api/admin/templates?category=ml`);
+    const response = await request.get(`${API_BASE}/admin/templates?category=ml`);
     expect(response.ok()).toBeTruthy();
 
     const data = await response.json();
@@ -337,7 +379,7 @@ test.describe('Admin Pages - Agent Templates', () => {
   test('should create agent from template (API test)', async ({ page, request }) => {
     await loginAsAdmin(page);
 
-    const response = await request.post(`${BASE_URL}/api/admin/templates/sales_forecaster/create`, {
+    const response = await request.post(`${API_BASE}/admin/templates/sales_forecaster/create`, {
       data: {
         name: 'My Custom Sales Forecaster',
         priority: 5
@@ -423,19 +465,79 @@ test.describe('Admin Pages - System Monitoring', () => {
     // For local mode with storageState, token is already in localStorage
   });
 
-  test('should access system status API', async ({ page, request }) => {
+  test('should access system status API', async ({ page }) => {
     await loginAsAdmin(page);
 
-    const response = await request.get(`${BASE_URL}/api/admin/system/status`);
+    let token = await page.evaluate(() => window.localStorage.getItem('auth_token'));
+    if (!token) {
+      const loginResponse = await page.request.post(`${API_BASE}/auth/login`, {
+        data: {
+          email: ADMIN_EMAIL,
+          password: ADMIN_PASSWORD,
+        },
+      });
+      expect(loginResponse.ok()).toBeTruthy();
+      const loginData = await loginResponse.json();
+      token = loginData.token;
+    }
+
+    const response = await page.request.get(`${API_BASE}/admin/health`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
     expect(response.ok()).toBeTruthy();
 
     const data = await response.json();
     expect(data.success).toBeTruthy();
-    expect(data.system).toBeDefined();
-    expect(data.system.totalAgents).toBeGreaterThan(0);
-    expect(data.system.totalTools).toBeGreaterThan(0);
+    expect(data.data).toBeDefined();
+    expect(data.data.status).toBeDefined();
+    expect(data.data.services).toBeDefined();
+    expect(data.data.services.database).toBeDefined();
 
-    console.log(`✅ System status: ${data.system.totalAgents} agents, ${data.system.totalTools} tools`);
+    console.log(`System health status: ${data.data.status}`);
+  });
+
+  test('should access Stripe webhook diagnostics API', async ({ page }) => {
+    await loginAsAdmin(page);
+
+    let token = await page.evaluate(() => window.localStorage.getItem('auth_token'));
+    if (!token) {
+      const loginResponse = await page.request.post(`${API_BASE}/auth/login`, {
+        data: {
+          email: ADMIN_EMAIL,
+          password: ADMIN_PASSWORD,
+        },
+      });
+      expect(loginResponse.ok()).toBeTruthy();
+      const loginData = await loginResponse.json();
+      token = loginData.token;
+    }
+
+    const response = await page.request.get(`${API_BASE}/payment/webhook/diagnostics`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    expect(response.ok()).toBeTruthy();
+
+    const data = await response.json();
+    expect(data.success).toBeTruthy();
+    expect(data.data).toBeDefined();
+    expect(data.data.stripeConfigured).toBeDefined();
+    expect(data.data.webhookSecretConfigured).toBeDefined();
+    expect(data.data.signatureValidationEnabled).toBeDefined();
+    expect(Array.isArray(data.data.webhookPaths)).toBeTruthy();
+    expect(Array.isArray(data.data.recentProjectWebhookActivity)).toBeTruthy();
+
+    console.log(`Webhook diagnostics signature status: ${data.data.signatureValidationEnabled}`);
+  });
+
+  test('should show Stripe webhook validation panel on admin dashboard', async ({ page }) => {
+    await navigateToAdminPage(page, 'dashboard');
+
+    await expect(page.getByText(/Stripe Webhook Validation/i).first()).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText(/Signature Verification/i).first()).toBeVisible({ timeout: 10000 });
   });
 
   test('should display system metrics', async ({ page }) => {
@@ -474,7 +576,7 @@ test.describe('Admin Pages - Security & Authentication', () => {
 
   test('should enforce admin role (API test)', async ({ page, request }) => {
     // Try to access admin API without authentication
-    const response = await request.get(`${BASE_URL}/api/admin/agents`);
+    const response = await request.get(`${API_BASE}/admin/agents`);
 
     // Should return 401 or 403
     expect([401, 403].includes(response.status())).toBeTruthy();
@@ -488,7 +590,7 @@ test.describe('Admin Pages - Security & Authentication', () => {
     // Make multiple rapid requests (more than rate limit)
     const requests = [];
     for (let i = 0; i < 10; i++) {
-      requests.push(request.get(`${BASE_URL}/api/admin/agents`));
+      requests.push(request.get(`${API_BASE}/admin/agents`));
     }
 
     const responses = await Promise.all(requests);

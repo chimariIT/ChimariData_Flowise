@@ -13,12 +13,14 @@ Features:
 from typing import Dict, List, Optional, Any, Tuple, Set
 import logging
 import hashlib
+import json
 from collections import defaultdict
 from datetime import datetime
 
 # Pandas for data transformations
 import pandas as pd
 import numpy as np
+from sqlalchemy import text as sa_text
 
 # Local imports
 from ..models.schemas import (
@@ -26,6 +28,7 @@ from ..models.schemas import (
     TransformationOperation, AggregationMethod, JoinType,
     ColumnDefinition, BusinessDefinition
 )
+from ..db import get_db_context
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -844,26 +847,270 @@ async def compile_and_execute_transformation_plan(
     Returns:
         Dictionary with execution results
     """
-    # In a real implementation, this would:
-    # 1. Load datasets from storage
-    # 2. Create transformation plan from mappings
-    # 3. Compile transformations with business definitions
-    # 4. Execute transformations
-    # 5. Return results
+    def _coerce_json(value: Any) -> Any:
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except Exception:
+                return value
+        return value
 
-    # For now, return mock result
-    return {
-        "success": True,
-        "transformation_plan": {
-            "project_id": project_id,
-            "dataset_id": datasets[0] if datasets else "",
-            "steps": []
-        },
-        "steps_executed": [],
-        "transformed_data": {},
-        "row_count": 0,
-        "column_count": 0
-    }
+    def _extract_rows(dataset_row: Dict[str, Any]) -> List[Dict[str, Any]]:
+        metadata = _coerce_json(dataset_row.get("metadata")) or {}
+        ingestion = _coerce_json(dataset_row.get("ingestion_metadata")) or {}
+        candidates = [
+            ingestion.get("transformedData") if isinstance(ingestion, dict) else None,
+            metadata.get("transformedData") if isinstance(metadata, dict) else None,
+            _coerce_json(dataset_row.get("data")),
+            _coerce_json(dataset_row.get("preview")),
+        ]
+        for candidate in candidates:
+            payload = _coerce_json(candidate)
+            if isinstance(payload, dict):
+                for key in ("data", "rows", "records"):
+                    rows = payload.get(key)
+                    if isinstance(rows, list):
+                        filtered = [row for row in rows if isinstance(row, dict)]
+                        if filtered:
+                            return filtered
+            elif isinstance(payload, list):
+                filtered = [row for row in payload if isinstance(row, dict)]
+                if filtered:
+                    return filtered
+        return []
+
+    def _map_operation(value: Any) -> Optional[TransformationOperation]:
+        if not value:
+            return None
+        normalized = str(value).strip().lower().replace("-", "_")
+        alias_map = {
+            "derive": TransformationOperation.DERIVE_COLUMN,
+            "derive_column": TransformationOperation.DERIVE_COLUMN,
+            "calculate": TransformationOperation.DERIVE_COLUMN,
+            "aggregate": TransformationOperation.AGGREGATE,
+            "summarize": TransformationOperation.AGGREGATE,
+            "filter": TransformationOperation.FILTER_ROWS,
+            "filter_rows": TransformationOperation.FILTER_ROWS,
+            "join": TransformationOperation.JOIN_DATASETS,
+            "join_datasets": TransformationOperation.JOIN_DATASETS,
+            "normalize": TransformationOperation.NORMALIZE,
+            "encode": TransformationOperation.ENCODE_CATEGORICAL,
+            "encode_categorical": TransformationOperation.ENCODE_CATEGORICAL,
+            "fill_missing": TransformationOperation.FILL_MISSING,
+            "impute": TransformationOperation.FILL_MISSING,
+            "rename": TransformationOperation.RENAME_COLUMN,
+            "rename_column": TransformationOperation.RENAME_COLUMN,
+            "cast": TransformationOperation.CAST_TYPE,
+            "cast_type": TransformationOperation.CAST_TYPE,
+        }
+        return alias_map.get(normalized)
+
+    def _build_steps(
+        source_mappings: List[Dict[str, Any]],
+        available_columns: List[str],
+    ) -> Tuple[List[TransformationStep], List[str]]:
+        steps: List[TransformationStep] = []
+        warnings: List[str] = []
+        available_set = set(available_columns)
+
+        for idx, mapping in enumerate(source_mappings or []):
+            operation = _map_operation(mapping.get("operation"))
+            if not operation:
+                continue
+
+            raw_sources = (
+                mapping.get("source_columns")
+                or mapping.get("related_columns")
+                or mapping.get("sourceColumns")
+                or []
+            )
+            source_columns = [
+                str(col).strip()
+                for col in raw_sources
+                if isinstance(col, str) and str(col).strip()
+            ]
+            source_columns = [col for col in source_columns if (not available_set or col in available_set)]
+            if not source_columns:
+                warnings.append(f"Skipped mapping {idx + 1}: no valid source columns")
+                continue
+
+            target_column = (
+                mapping.get("target_column")
+                or mapping.get("targetColumn")
+                or mapping.get("element_name")
+                or source_columns[0]
+            )
+            target_column = str(target_column).strip() or source_columns[0]
+
+            parameters = mapping.get("parameters") if isinstance(mapping.get("parameters"), dict) else {}
+            formula = mapping.get("formula") or parameters.get("formula") or parameters.get("expression")
+            condition = mapping.get("condition") or parameters.get("condition")
+            join_config = mapping.get("join_config") or parameters.get("join_config")
+            aggregation_raw = (
+                mapping.get("aggregation_method")
+                or parameters.get("aggregation_method")
+                or parameters.get("aggregation")
+            )
+            aggregation_method = None
+            if aggregation_raw:
+                try:
+                    aggregation_method = AggregationMethod(str(aggregation_raw).strip().lower())
+                except Exception:
+                    warnings.append(
+                        f"Unsupported aggregation method in mapping {idx + 1}: {aggregation_raw}"
+                    )
+
+            step = TransformationStep(
+                step_id=f"auto_step_{idx + 1}",
+                operation=operation,
+                source_columns=source_columns,
+                target_column=target_column,
+                formula=formula if isinstance(formula, str) else None,
+                condition=condition if isinstance(condition, dict) else None,
+                aggregation_method=aggregation_method,
+                join_config=join_config if isinstance(join_config, dict) else None,
+                description=f"Auto-generated from mapping {idx + 1}",
+            )
+            steps.append(step)
+
+        return steps, warnings
+
+    try:
+        normalized_dataset_ids = [str(dataset_id) for dataset_id in (datasets or []) if str(dataset_id).strip()]
+
+        async with get_db_context() as session:
+            column_result = await session.execute(
+                sa_text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = 'datasets'"
+                )
+            )
+            dataset_columns = {row[0] for row in column_result.fetchall()}
+
+            selectable_columns = ["id", "project_id"]
+            for candidate in ("ingestion_metadata", "metadata", "data", "preview"):
+                if candidate in dataset_columns:
+                    selectable_columns.append(candidate)
+
+            if not selectable_columns:
+                raise ValueError("datasets table schema unavailable")
+
+            where_parts = ["d.project_id = :project_id"]
+            params: Dict[str, Any] = {"project_id": project_id}
+            if normalized_dataset_ids:
+                placeholders: List[str] = []
+                for index, dataset_id in enumerate(normalized_dataset_ids):
+                    key = f"dataset_id_{index}"
+                    params[key] = dataset_id
+                    placeholders.append(f":{key}")
+                where_parts.append(f"d.id IN ({', '.join(placeholders)})")
+
+            select_clause = ", ".join([f'd.\"{col}\"' for col in selectable_columns])
+            dataset_query = (
+                f"SELECT {select_clause} FROM datasets d "
+                f"WHERE {' AND '.join(where_parts)} "
+                f"ORDER BY d.id ASC LIMIT 1"
+            )
+
+            dataset_result = await session.execute(sa_text(dataset_query), params)
+            dataset_row = dataset_result.first()
+            if dataset_row is None:
+                return {
+                    "success": False,
+                    "error": "No dataset found for project",
+                    "steps_executed": [],
+                    "transformed_data": {},
+                    "row_count": 0,
+                    "column_count": 0,
+                }
+            dataset_data = dict(zip(dataset_result.keys(), dataset_row))
+
+        rows = _extract_rows(dataset_data)
+        if not rows:
+            return {
+                "success": False,
+                "error": "No usable dataset rows available for transformation",
+                "steps_executed": [],
+                "transformed_data": {},
+                "row_count": 0,
+                "column_count": 0,
+            }
+
+        dataframe = pd.DataFrame(rows)
+        if dataframe.empty:
+            return {
+                "success": False,
+                "error": "Dataset contains no transformable rows",
+                "steps_executed": [],
+                "transformed_data": {},
+                "row_count": 0,
+                "column_count": 0,
+            }
+
+        dataset_id = str(dataset_data.get("id") or (normalized_dataset_ids[0] if normalized_dataset_ids else ""))
+        available_columns = [str(col) for col in dataframe.columns.tolist()]
+        steps, step_warnings = _build_steps(mappings or [], available_columns)
+        executor = get_transformation_executor()
+
+        if not steps:
+            transformed_data = executor._dataframe_to_dict(dataframe)
+            return {
+                "success": True,
+                "transformation_plan": {
+                    "project_id": project_id,
+                    "dataset_id": dataset_id,
+                    "steps": [],
+                    "generated_from_mappings": len(mappings or []),
+                },
+                "steps_executed": [],
+                "transformed_data": transformed_data,
+                "preview_data": transformed_data.get("data", [])[:100],
+                "transformed_dataset_id": dataset_id,
+                "row_count": len(dataframe),
+                "column_count": len(dataframe.columns),
+                "warnings": [
+                    *step_warnings,
+                    "No executable transformation operations found in mappings. Returned canonical dataset view.",
+                ],
+            }
+
+        plan = TransformationPlan(
+            project_id=project_id,
+            dataset_id=dataset_id,
+            steps=steps,
+            business_context=business_context,
+            estimated_runtime_ms=max(500, len(steps) * 500),
+        )
+        execution_result = executor.execute_plan(
+            plan=plan,
+            datasets={dataset_id: dataframe},
+            business_context=business_context,
+        )
+        result_payload = (
+            execution_result.model_dump()
+            if hasattr(execution_result, "model_dump")
+            else execution_result.dict()
+        )
+        result_payload["transformation_plan"] = (
+            plan.model_dump()
+            if hasattr(plan, "model_dump")
+            else plan.dict()
+        )
+        result_payload["warnings"] = [*step_warnings, *(result_payload.get("warnings") or [])]
+        transformed = result_payload.get("transformed_data") or {}
+        result_payload["preview_data"] = transformed.get("data", [])[:100] if isinstance(transformed, dict) else []
+        result_payload["transformed_dataset_id"] = dataset_id
+        return result_payload
+    except Exception as e:
+        logger.error(f"compile_and_execute_transformation_plan failed: {e}", exc_info=True)
+        return {
+            "success": False,
+            "error": str(e),
+            "steps_executed": [],
+            "transformed_data": {},
+            "row_count": 0,
+            "column_count": 0,
+        }
 
 
 # ============================================================================

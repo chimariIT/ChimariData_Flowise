@@ -34,6 +34,8 @@ import {
 import UserQuestionAnswers from "@/components/UserQuestionAnswers";
 import AudienceTranslatedResults from "@/components/AudienceTranslatedResults";
 import { EvidenceChainUI } from "@/components/EvidenceChainUI";
+import DataProfileLiveDashboard from "@/components/DataProfileLiveDashboard";
+import WhatIfFollowUpPanel from "@/components/WhatIfFollowUpPanel";
 // MEDIUM PRIORITY FIX: Use canonical journey types from shared/
 import { JourneyType } from "@shared/canonical-types";
 
@@ -108,6 +110,7 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
   const [analysisResults, setAnalysisResults] = useState<any>(null);
   const [insights, setInsights] = useState<any[]>([]);
   const [recommendations, setRecommendations] = useState<any[]>([]);
+  const [projectDatasets, setProjectDatasets] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [artifacts, setArtifacts] = useState<any[]>([]);
   const [artifactsLoading, setArtifactsLoading] = useState(true);
@@ -142,6 +145,7 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
       // Step 2: Fetch fresh data from API (will override cached data)
       loadResults(projectId);
       loadArtifacts(projectId);
+      loadProjectDatasets(projectId);
     } else if (!projectLoading) {
       setIsLoading(false);
       setArtifactsLoading(false);
@@ -437,6 +441,24 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
     }
   }
 
+  async function loadProjectDatasets(pid: string) {
+    try {
+      const response = await apiClient.getProjectDatasets(pid);
+      if (response?.success && Array.isArray(response.datasets)) {
+        setProjectDatasets(response.datasets);
+      } else if (Array.isArray(response?.datasets)) {
+        setProjectDatasets(response.datasets);
+      } else if (Array.isArray(response)) {
+        setProjectDatasets(response);
+      } else {
+        setProjectDatasets([]);
+      }
+    } catch (datasetError) {
+      console.warn("Could not load project datasets for data profile explorer:", datasetError);
+      setProjectDatasets([]);
+    }
+  }
+
   // Cleanup polling on unmount
   useEffect(() => {
     return () => {
@@ -539,6 +561,24 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
   const analysisMethods = (analysisResults?.analysisTypes || [])
     .filter((type: string) => typeof type === 'string' && type.trim().length > 0)
     .map((type: string) => type.trim());
+
+  const baseQuestions = useMemo(() => {
+    const fromQuestionAnswers = Array.isArray(analysisResults?.questionAnswers?.answers)
+      ? analysisResults.questionAnswers.answers
+          .map((answer: any) => answer?.question || answer?.questionText)
+          .filter((question: any): question is string => typeof question === "string" && question.trim().length > 0)
+      : [];
+
+    const fromBusinessQuestions = typeof project?.businessQuestions === "string"
+      ? project.businessQuestions
+          .split(/\n|;|\d+\.\s/)
+          .map((question: string) => question.trim())
+          .filter((question: string) => question.length > 0)
+      : [];
+
+    const merged = [...fromQuestionAnswers, ...fromBusinessQuestions];
+    return Array.from(new Set(merged)).slice(0, 8);
+  }, [analysisResults, project]);
 
   // LOW PRIORITY FIX: Use robust artifact type mapping instead of fragile string matching
   const ARTIFACT_TYPE_ICONS: Record<string, typeof FileText> = {
@@ -686,6 +726,7 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
     if (projectId) {
       loadResults(projectId);
       loadArtifacts(projectId);
+      loadProjectDatasets(projectId);
     }
   };
 
@@ -1200,7 +1241,7 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
         <TabsList className="grid w-full grid-cols-7">
           <TabsTrigger value="translated">For You</TabsTrigger>
           <TabsTrigger value="answers">Q&A</TabsTrigger>
-          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="overview">Data Profile</TabsTrigger>
           <TabsTrigger value="insights">Insights</TabsTrigger>
           <TabsTrigger value="recommendations">Actions</TabsTrigger>
           <TabsTrigger value="technical">Technical</TabsTrigger>
@@ -1216,6 +1257,11 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
         <TabsContent value="answers" className="space-y-4">
           {/* Use dedicated UserQuestionAnswers component for prominent Q&A display */}
           <UserQuestionAnswers project={project} />
+
+          <WhatIfFollowUpPanel
+            projectId={project?.id || projectId || undefined}
+            existingQuestions={baseQuestions}
+          />
 
           {/* Phase 5: Analysis Trail - Question-to-Answer Chain */}
           {project?.analysisResults?.questionAnswerMapping && project.analysisResults.questionAnswerMapping.length > 0 && (
@@ -1320,6 +1366,13 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
         </TabsContent >
 
         <TabsContent value="overview" className="space-y-4">
+          <DataProfileLiveDashboard
+            analysisResults={analysisResults}
+            journeyProgress={journeyProgress}
+            datasets={projectDatasets}
+            isPreview={isPreview}
+          />
+
           {/* [DATA CONTINUITY FIX] Data Pipeline Summary - shows the journey from upload to analysis */}
           {journeyProgress && (
             <Card className="border-emerald-200 bg-gradient-to-r from-emerald-50 to-teal-50">

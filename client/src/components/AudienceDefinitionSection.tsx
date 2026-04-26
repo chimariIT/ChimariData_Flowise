@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -55,13 +56,14 @@ export function AudienceDefinitionSection({
   const displayConfig = getJourneyDisplayConfig(journeyType);
   const allowedAudiences = ALL_AUDIENCES.filter(a => displayConfig.allowedAudiences.includes(a.value));
 
-  // Non-tech: Auto-select executive and show a simple confirmation instead of radio group
-  if (journeyType === 'non-tech') {
-    // Ensure executive is selected
-    if (primaryAudience !== 'executive') {
+  useEffect(() => {
+    if (journeyType === 'non-tech' && primaryAudience !== 'executive') {
       setPrimaryAudience('executive');
     }
+  }, [journeyType, primaryAudience, setPrimaryAudience]);
 
+  // Non-tech: Auto-select executive and show a simple confirmation instead of radio group
+  if (journeyType === 'non-tech') {
     return (
       <div className="space-y-6">
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">

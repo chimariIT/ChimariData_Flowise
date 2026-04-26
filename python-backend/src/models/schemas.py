@@ -13,7 +13,7 @@ Provides Pydantic models for all data structures used in the pipeline:
 All models use strict type validation and provide clean serialization/deserialization.
 """
 
-from pydantic import BaseModel, Field, validator, field_validator
+from pydantic import BaseModel, ConfigDict, Field, validator, field_validator
 from typing import Optional, List, Dict, Any, Literal, Union
 from datetime import datetime
 from enum import Enum
@@ -51,9 +51,9 @@ class ColumnDefinition(BaseModel):
     description: Optional[str] = Field(None, description="Column description")
     unique_count: Optional[int] = Field(None, ge=0, description="Number of unique values")
 
-    class Config:
-        json_schema_extra = "allow"
-        schema_extra = {
+    model_config = ConfigDict(
+        extra="allow",
+        json_schema_extra={
             "example": {
                 "name": "employee_id",
                 "type": "numeric",
@@ -62,6 +62,7 @@ class ColumnDefinition(BaseModel):
                 "pii_sensitivity": "low"
             }
         }
+    )
 
 
 class PIIAnalysisResult(BaseModel):
@@ -72,8 +73,7 @@ class PIIAnalysisResult(BaseModel):
     detected_fields: List[str] = Field(default_factory=list)
     recommendations: List[str] = Field(default_factory=list)
 
-    class Config:
-        json_schema_extra = "allow"
+    model_config = ConfigDict(extra="allow")
 
 
 class PIIDecision(BaseModel):
@@ -125,15 +125,18 @@ class Dataset(BaseModel):
     description: Optional[str] = None
     source_type: SourceType
     file_path: str = Field(..., description="Path to uploaded file")
-    schema: Optional[DatasetSchema] = None
+    schema_: Optional[DatasetSchema] = Field(default=None, alias="schema")
     pii_analysis: Optional[PIIAnalysisResult] = None
     pii_decision: Optional[PIIDecision] = None
     record_count: int = Field(..., ge=0, description="Number of records")
     created_at: datetime = Field(default_factory=datetime.utcnow, description="Creation timestamp")
     updated_at: datetime = Field(default_factory=datetime.utcnow, description="Last update timestamp")
 
-    class Config:
-        json_schema_extra = "allow"
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    @property
+    def schema(self) -> Optional[DatasetSchema]:
+        return self.schema_
 
 
 # ============================================================================
@@ -164,8 +167,7 @@ class QuestionElementMapping(BaseModel):
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     embedding: Optional[List[float]] = Field(None, description="Question embedding vector")
 
-    class Config:
-        json_schema_extra = "allow"
+    model_config = ConfigDict(extra="allow")
 
 
 class QuestionAnswerMapping(BaseModel):
@@ -239,8 +241,7 @@ class TransformationStep(BaseModel):
             raise ValueError("source_columns must have at least one element")
         return v
 
-    class Config:
-        json_schema_extra = "allow"
+    model_config = ConfigDict(extra="allow")
 
 
 class TransformationPlan(BaseModel):
@@ -252,8 +253,7 @@ class TransformationPlan(BaseModel):
     estimated_runtime_ms: Optional[int] = Field(None, ge=0)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
-    class Config:
-        json_schema_extra = "allow"
+    model_config = ConfigDict(extra="allow")
 
 
 class TransformationResult(BaseModel):
@@ -296,8 +296,7 @@ class AnalysisRequest(BaseModel):
     include_metadata: bool = True
     max_records: Optional[int] = Field(None, ge=1)
 
-    class Config:
-        json_schema_extra = "allow"
+    model_config = ConfigDict(extra="allow")
 
 
 class AnalysisDataSummary(BaseModel):
@@ -319,8 +318,7 @@ class AnalysisResult(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Execution metadata")
     errors: List[str] = Field(default_factory=list)
 
-    class Config:
-        json_schema_extra = "allow"
+    model_config = ConfigDict(extra="allow")
 
 
 class VisualizationConfig(BaseModel):
@@ -446,8 +444,7 @@ class JourneyCreate(BaseModel):
     description: Optional[str] = None
     journey_type: JourneyType
 
-    class Config:
-        json_schema_extra = "allow"
+    model_config = ConfigDict(extra="allow")
 
 
 class Journey(BaseModel):

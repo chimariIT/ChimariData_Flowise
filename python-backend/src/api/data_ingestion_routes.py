@@ -16,7 +16,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
 
@@ -43,9 +43,11 @@ class IngestResponse(BaseModel):
     message: str
     datasetId: Optional[str] = None
     recordCount: int = 0
-    schema: Optional[Dict[str, str]] = None
+    schema_: Optional[Dict[str, str]] = Field(default=None, alias="schema")
     preview: Optional[List[Dict]] = None
     error: Optional[str] = None
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 def _validate_sql_readonly(query: str) -> None:

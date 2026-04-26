@@ -97,6 +97,14 @@ const ToolsManagement: React.FC = () => {
   const [showAddTool, setShowAddTool] = useState(false);
   const [showToolDetails, setShowToolDetails] = useState(false);
   const [showExecutionLogs, setShowExecutionLogs] = useState(false);
+  const [newToolData, setNewToolData] = useState({
+    name: '',
+    description: '',
+    service: '',
+    category: 'data_analysis',
+    permissions: '',
+    tags: '',
+  });
 
   useEffect(() => {
     loadToolsData();
@@ -146,7 +154,7 @@ const ToolsManagement: React.FC = () => {
         category: tool.category || 'utility',
         version: tool.version || '1.0.0',
         author: tool.author || 'System',
-        status: 'active' as const, // Default to active since registry doesn't track status
+        status: (tool.status || 'active') as Tool['status'],
         tags: tool.tags || [],
         metrics: tool.metrics || {
           totalExecutions: 0,
@@ -161,9 +169,9 @@ const ToolsManagement: React.FC = () => {
           model: 'usage_based',
           costPerExecution: 0
         },
-        permissions: tool.permissions || {
-          userTypes: [],
-          subscriptionTiers: []
+        permissions: {
+          userTypes: tool.permissions?.userTypes || [],
+          subscriptionTiers: tool.permissions?.subscriptionTiers || []
         },
         createdAt: tool.createdAt || new Date().toISOString(),
         updatedAt: tool.updatedAt || new Date().toISOString()
@@ -247,6 +255,70 @@ const ToolsManagement: React.FC = () => {
       await loadToolsData();
     } catch (err: any) {
       setError(`Failed to ${action} tool: ${err.message}`);
+    }
+  };
+
+  const resetNewToolData = () => {
+    setNewToolData({
+      name: '',
+      description: '',
+      service: '',
+      category: 'data_analysis',
+      permissions: '',
+      tags: '',
+    });
+  };
+
+  const handleCreateTool = async () => {
+    if (!newToolData.name.trim() || !newToolData.description.trim()) {
+      setError('Tool name and description are required');
+      return;
+    }
+
+    try {
+      const token = localStorage.getItem('auth_token');
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      const permissions = newToolData.permissions
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean);
+
+      const tags = newToolData.tags
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean);
+
+      const response = await fetch('/api/admin/tools', {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify({
+          id: newToolData.name.trim().toLowerCase().replace(/\s+/g, '_'),
+          name: newToolData.name.trim(),
+          description: newToolData.description.trim(),
+          service: newToolData.service.trim() || undefined,
+          category: newToolData.category,
+          permissions,
+          tags,
+        }),
+      });
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload?.detail || payload?.error || `Failed to create tool (${response.status})`);
+      }
+
+      setShowAddTool(false);
+      resetNewToolData();
+      await loadToolsData();
+    } catch (err: any) {
+      setError(err.message || 'Failed to create tool');
     }
   };
 
@@ -565,6 +637,113 @@ const ToolsManagement: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Add Tool Modal */}
+      {showAddTool && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 max-w-xl shadow-lg rounded-md bg-white">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-medium text-gray-900">Create New Tool</h3>
+              <button
+                onClick={() => {
+                  setShowAddTool(false);
+                  resetNewToolData();
+                }}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <XCircle className="h-6 w-6" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
+                <input
+                  type="text"
+                  name="name"
+                  placeholder="Tool name"
+                  value={newToolData.name}
+                  onChange={(e) => setNewToolData((prev) => ({ ...prev, name: e.target.value }))}
+                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                <textarea
+                  name="description"
+                  placeholder="Describe what this tool does"
+                  rows={3}
+                  value={newToolData.description}
+                  onChange={(e) => setNewToolData((prev) => ({ ...prev, description: e.target.value }))}
+                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Service</label>
+                <input
+                  type="text"
+                  name="service"
+                  placeholder="Service class or handler"
+                  value={newToolData.service}
+                  onChange={(e) => setNewToolData((prev) => ({ ...prev, service: e.target.value }))}
+                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
+                <select
+                  name="category"
+                  value={newToolData.category}
+                  onChange={(e) => setNewToolData((prev) => ({ ...prev, category: e.target.value }))}
+                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="data_analysis">Data Analysis</option>
+                  <option value="data_transformation">Data Transformation</option>
+                  <option value="data_validation">Data Validation</option>
+                  <option value="machine_learning">Machine Learning</option>
+                  <option value="external_integration">External Integration</option>
+                  <option value="utility">Utility</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Permissions</label>
+                <input
+                  type="text"
+                  name="permissions"
+                  placeholder="permission_a, permission_b"
+                  value={newToolData.permissions}
+                  onChange={(e) => setNewToolData((prev) => ({ ...prev, permissions: e.target.value }))}
+                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+
+            <div className="mt-6 flex justify-end space-x-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAddTool(false);
+                  resetNewToolData();
+                }}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                onClick={handleCreateTool}
+                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700"
+              >
+                Create
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Tool Details Modal */}
       {showToolDetails && selectedTool && (

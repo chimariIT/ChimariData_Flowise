@@ -5,7 +5,6 @@ import { comprehensiveMLHandler } from './comprehensive-ml-handler';
 import { llmFineTuningHandler } from './llm-fine-tuning-handler';
 import { EnhancedVisualizationEngine } from './enhanced-visualization-engine';
 import { intelligentLibrarySelector } from './intelligent-library-selector';
-import { sparkVisualizationHandler, sparkStatisticalHandler } from './spark-services';
 import type { ToolExecutionContext, ToolExecutionResult } from './agent-tool-handlers';
 import { artifactService } from './artifact-persistence-service';
 
@@ -3092,37 +3091,6 @@ export async function executeTool(
         result = await statisticalAnalyzerHandler.execute(input, executionContext);
         break;
 
-      // Spark-Based Distributed Tools
-      case 'spark_visualization_engine':
-        result = await sparkVisualizationHandler.createDistributedVisualization(input.data, input.config);
-        break;
-
-      case 'spark_statistical_analyzer':
-        result = await sparkStatisticalHandler.performDistributedAnalysis(input.data, input.config);
-        break;
-
-      case 'spark_ml_pipeline':
-      case 'spark_data_processor':
-      case 'spark_streaming_analyzer':
-      case 'spark_graph_analyzer':
-        // These will be implemented in future iterations
-        result = {
-          executionId: executionContext.executionId,
-          toolId: toolName,
-          status: 'success',
-          result: {
-            message: `Spark tool ${toolName} is ready for implementation`,
-            note: 'This Spark tool will be implemented in the next iteration',
-            sparkReady: true
-          },
-          metrics: {
-            duration: 0,
-            resourcesUsed: { cpu: 0, memory: 0, storage: 0 },
-            cost: 0
-          }
-        };
-        break;
-
       // ========================================
       // PROJECT MANAGER TOOLS
       // ========================================
@@ -3566,7 +3534,6 @@ export async function executeTool(
       case 'data_pipeline_builder':
       case 'data_quality_monitor':
       case 'apply_transformations':
-      case 'data_lineage_tracker':
       case 'schema_evolution_manager':
       case 'batch_processor':
         const deAgentHandlers = await import('./agent-tool-handlers');
@@ -4263,25 +4230,6 @@ export async function executeTool(
             break;
           case 'decision_auditor':
             result = await govHandlers.handleDecisionAuditor(input, executionContext);
-            break;
-          default:
-            result = createPlaceholderResult(executionContext, toolName);
-        }
-        break;
-
-      // ========================================
-      // HEALTH CHECK TOOLS
-      // ========================================
-      case 'ml_health_check':
-      case 'llm_health_check':
-        const healthHandlersModule = await import('./agent-tool-handlers');
-        const healthHandlers = healthHandlersModule.healthCheckToolHandlers;
-        switch (toolName) {
-          case 'ml_health_check':
-            result = await healthHandlers.handleMLHealthCheck(input, executionContext);
-            break;
-          case 'llm_health_check':
-            result = await healthHandlers.handleLLMHealthCheck(input, executionContext);
             break;
           default:
             result = createPlaceholderResult(executionContext, toolName);

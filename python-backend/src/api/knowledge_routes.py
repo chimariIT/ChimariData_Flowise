@@ -74,6 +74,8 @@ async def search_knowledge(request: SearchRequest):
             "results": results,
             "count": len(results),
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -100,6 +102,8 @@ async def get_related_nodes(node_id: str, max_depth: int = 2):
             "results": nodes,
             "count": len(nodes),
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -107,6 +111,31 @@ async def get_related_nodes(node_id: str, max_depth: int = 2):
 # ============================================================================
 # Analysis Pattern Endpoints
 # ============================================================================
+
+
+@router.get("/patterns/most-used", response_model=dict)
+async def get_most_used_patterns(limit: int = 10):
+    """
+    Get most frequently used analysis patterns
+
+    Args:
+        limit: Maximum number of patterns
+
+    Returns:
+        List of most used patterns
+    """
+    try:
+        patterns = await knowledge_service.get_most_used_patterns(limit=limit)
+
+        return {
+            "success": True,
+            "data": patterns,
+            "count": len(patterns),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/patterns/{analysis_type}", response_model=dict)
@@ -131,6 +160,8 @@ async def get_analysis_patterns(analysis_type: str, limit: int = 20):
             "success": True,
             "data": pattern,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -155,29 +186,8 @@ async def create_analysis_pattern(request: CreatePatternRequest, user_id: str = 
             "data": result,
             "message": "Analysis pattern created",
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/patterns/most-used", response_model=dict)
-async def get_most_used_patterns(limit: int = 10):
-    """
-    Get most frequently used analysis patterns
-
-    Args:
-        limit: Maximum number of patterns
-
-    Returns:
-        List of most used patterns
-    """
-    try:
-        patterns = await knowledge_service.learn_from_analysis({})
-
-        return {
-            "success": True,
-            "data": patterns,
-            "count": len(patterns),
-        }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -208,12 +218,14 @@ async def get_template_feedback(template_id: str, limit: int = 20):
             "feedback": feedback,
             "count": len(feedback),
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/templates/{template_id}/feedback", response_model=dict)
-async def add_feedback(request: AddFeedbackRequest, user_id: str = "system"):
+async def add_feedback(template_id: str, request: AddFeedbackRequest, user_id: str = "system"):
     """
     Add user feedback for a template
 
@@ -222,15 +234,26 @@ async def add_feedback(request: AddFeedbackRequest, user_id: str = "system"):
     - Suggest improvements based on feedback
     """
     try:
+        if request.template_id != template_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Template ID in request body must match route parameter",
+            )
+
         result = await knowledge_service.add_feedback(
-            template_id=request.template_id,
+            template_id=template_id,
             user_id=user_id,
             rating=request.rating,
             feedback_text=request.feedback_text,
             suggested_improvements=request.suggested_improvements,
         )
 
-        return result
+        return {
+            "success": True,
+            "data": result,
+        }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -254,6 +277,8 @@ async def get_helpful_feedback(limit: int = 20):
             "feedback": feedback,
             "count": len(feedback),
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -278,6 +303,8 @@ async def seed_knowledge_base():
             "success": True,
             "data": result,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

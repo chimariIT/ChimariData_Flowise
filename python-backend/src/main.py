@@ -12,7 +12,7 @@ Architecture: Python + LangChain + Pydantic + FastAPI + PostgreSQL
 """
 
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator, Dict, Optional, Any, Set
+from typing import AsyncGenerator, Dict, Optional, Any, Set, List
 import logging
 import os
 from pathlib import Path
@@ -21,11 +21,40 @@ from datetime import datetime
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 import uvicorn
 
-# Load environment variables
-load_dotenv()
+# Load environment variables with explicit precedence:
+# 1) repository root (.env, .env.development)
+# 2) python-backend/.env (highest precedence for backend-specific overrides)
+_SRC_DIR = Path(__file__).resolve().parent
+_BACKEND_DIR = _SRC_DIR.parent
+_ROOT_DIR = _BACKEND_DIR.parent
+
+
+def _merge_env_file(path: Path, *, override: bool) -> None:
+    """Merge dotenv values into process env, skipping empty values."""
+    if not path.exists():
+        return
+
+    values = dotenv_values(path)
+    for key, raw_value in values.items():
+        if not key:
+            continue
+        if raw_value is None:
+            continue
+
+        value = str(raw_value).strip()
+        if value == "":
+            continue
+
+        if override or key not in os.environ:
+            os.environ[key] = value
+
+
+_merge_env_file(_ROOT_DIR / ".env", override=False)
+_merge_env_file(_ROOT_DIR / ".env.development", override=True)
+_merge_env_file(_BACKEND_DIR / ".env", override=True)
 
 # Configure logging
 logging.basicConfig(
@@ -48,7 +77,7 @@ class Settings:
     # Database
     DATABASE_URL: str = os.getenv(
         "DATABASE_URL",
-        "postgresql://postgres:postgres@localhost:5432/chimaridata"
+        "postgresql+asyncpg://postgres:postgres@localhost:5432/chimaridata"
     )
 
     # Redis
@@ -207,6 +236,11 @@ async def initialize_services():
     registry = get_business_registry()
     logger.info(f"Business definitions registry: {len(registry.definitions)} definitions")
 
+    if getattr(app.state, "routes_registered", False):
+        logger.info("API routes already registered")
+        validate_environment()
+        return
+
     # Include API routes
     from .api.routes import include_routes
     include_routes(app)
@@ -215,16 +249,19 @@ async def initialize_services():
     # Include billing routes (after app is fully created)
     from .api.billing_routes import router as billing_router
     app.include_router(billing_router, prefix="/api/v1")
+    app.include_router(billing_router)  # Also mount at root for Vite proxy rewrite (/api/billing/* → /billing/*)
     logger.info("Billing routes included")
 
     # Include knowledge routes (after app is fully created)
     from .api.knowledge_routes import router as knowledge_router
     app.include_router(knowledge_router, prefix="/api/v1")
+    app.include_router(knowledge_router)  # Also mount at root for Vite proxy rewrite
     logger.info("Knowledge routes included")
 
     # Include admin routes (after app is fully created)
     from .api.admin_routes import router as admin_router
     app.include_router(admin_router, prefix="/api/v1")
+    app.include_router(admin_router)  # Also mount at root for Vite proxy rewrite
     logger.info("Admin routes included")
 
     # Include verification routes (after app is fully created)
@@ -278,11 +315,22 @@ async def initialize_services():
     include_template_routes(app)
     logger.info("Template routes included")
 
+    # Include agent pipeline routes (U2A2A2U pipeline)
+    from .api.agent_pipeline_routes import include_agent_pipeline_routes
+    include_agent_pipeline_routes(app)
+    logger.info("Agent pipeline routes included")
+
     # Include auth routes (after app is fully created)
     # These are at /api/auth/* to match frontend expectations
     from .api.auth_routes import include_auth_routes
     include_auth_routes(app)
     logger.info("Auth routes included")
+
+    # Include compatibility routes for legacy frontend paths in Python mode
+    from .api.compat_routes import router as compat_router
+    app.include_router(compat_router)
+    logger.info("Compatibility routes included")
+    app.state.routes_registered = True
 
     # Validate required environment variables
     validate_environment()
@@ -319,6 +367,63 @@ def validate_environment():
         raise RuntimeError(error_msg)
 
     logger.info("Environment validation passed")
+
+
+def register_routes_without_startup() -> None:
+    """
+    Register API routers without requiring FastAPI lifespan startup.
+
+    This keeps tests (which may instantiate ASGITransport without lifespan)
+    and runtime route availability consistent.
+    """
+    if getattr(app.state, "routes_registered", False):
+        return
+
+    from .api.routes import include_routes
+    from .api.billing_routes import router as billing_router
+    from .api.knowledge_routes import router as knowledge_router
+    from .api.admin_routes import router as admin_router
+    from .api.verification_routes import router as verification_router
+    from .api.upload_routes import router as upload_router
+    from .api.data_ingestion_routes import router as data_ingestion_router
+    from .api.transformation_routes import router as transformation_router
+    from .api.analysis_routes import router as analysis_router, legacy_router as analysis_legacy_router
+    from .api.results_routes import router as results_router
+    from .api.semantic_routes import router as semantic_router
+    from .api.project_routes import include_project_routes
+    from .api.payment_routes import include_payment_routes
+    from .api.template_routes import include_template_routes
+    from .api.agent_pipeline_routes import include_agent_pipeline_routes
+    from .api.auth_routes import include_auth_routes
+    from .api.compat_routes import router as compat_router
+
+    include_routes(app)
+    app.include_router(billing_router, prefix="/api/v1")
+    app.include_router(billing_router)
+    app.include_router(knowledge_router, prefix="/api/v1")
+    app.include_router(knowledge_router)
+    app.include_router(admin_router, prefix="/api/v1")
+    app.include_router(admin_router)
+    app.include_router(verification_router)
+    app.include_router(upload_router)
+    app.include_router(data_ingestion_router)
+    app.include_router(transformation_router)
+    app.include_router(analysis_router)
+    app.include_router(analysis_legacy_router)
+    app.include_router(results_router)
+    app.include_router(semantic_router)
+    include_project_routes(app)
+    include_payment_routes(app)
+    include_template_routes(app)
+    include_agent_pipeline_routes(app)
+    include_auth_routes(app)
+    app.include_router(compat_router)
+
+    app.state.routes_registered = True
+    logger.info("API routes pre-registered")
+
+
+register_routes_without_startup()
 
 
 # ============================================================================
@@ -616,11 +721,10 @@ async def websocket_endpoint(
     user_id = None
     if token:
         try:
-            from .auth.middleware import verify_token
-            user = await verify_token(token)
-            if user:
-                user_id = user.id
-                logger.info(f"WebSocket authenticated: user_id={user_id}")
+            from .auth.middleware import decode_token
+            token_data = decode_token(token)
+            user_id = token_data.user_id
+            logger.info(f"WebSocket authenticated: user_id={user_id}")
         except Exception as e:
             logger.warning(f"WebSocket authentication failed: {e}")
             # Continue without authentication for development
@@ -635,7 +739,8 @@ async def websocket_endpoint(
 
     # Send welcome message
     await connection_manager.send_message(session_id, {
-        "type": "connected",
+        "type": "connection_established",
+        "status": "connected",
         "session_id": session_id,
         "project_id": project_id,
         "user_id": user_id,
@@ -659,8 +764,18 @@ async def websocket_endpoint(
                 )
 
             elif message_type == "subscribe":
-                # Subscribe to project updates
+                # Subscribe to project updates (supports both project_id and channels payload)
                 subscribe_project_id = data.get("project_id")
+                channels: List[str] = []
+                if not subscribe_project_id:
+                    raw_channels = data.get("channels") or []
+                    if isinstance(raw_channels, list):
+                        channels = [str(c) for c in raw_channels]
+                        for channel in channels:
+                            if channel.startswith("project:"):
+                                subscribe_project_id = channel.split(":", 1)[1]
+                                break
+
                 if subscribe_project_id:
                     # Update connection's project association
                     info = connection_manager.session_info.get(session_id, {})
@@ -677,11 +792,40 @@ async def websocket_endpoint(
                     info["project_id"] = subscribe_project_id
 
                     await connection_manager.send_message(session_id, {
-                        "type": "subscribed",
-                        "project_id": subscribe_project_id,
+                        "type": "subscription_confirmed",
+                        "data": {
+                            "channels": channels or [f"project:{subscribe_project_id}"],
+                            "project_id": subscribe_project_id,
+                        },
                         "timestamp": datetime.utcnow().isoformat()
                     })
                     logger.info(f"Session {session_id} subscribed to project {subscribe_project_id}")
+
+            elif message_type == "unsubscribe":
+                unsubscribe_project_id = data.get("project_id")
+                channels: List[str] = []
+                raw_channels = data.get("channels") or []
+                if isinstance(raw_channels, list):
+                    channels = [str(c) for c in raw_channels]
+                    if not unsubscribe_project_id:
+                        for channel in channels:
+                            if channel.startswith("project:"):
+                                unsubscribe_project_id = channel.split(":", 1)[1]
+                                break
+
+                if unsubscribe_project_id and unsubscribe_project_id in connection_manager.project_connections:
+                    connection_manager.project_connections[unsubscribe_project_id].discard(session_id)
+                    if not connection_manager.project_connections[unsubscribe_project_id]:
+                        del connection_manager.project_connections[unsubscribe_project_id]
+
+                await connection_manager.send_message(session_id, {
+                    "type": "unsubscription_confirmed",
+                    "data": {
+                        "channels": channels or ([f"project:{unsubscribe_project_id}"] if unsubscribe_project_id else []),
+                        "project_id": unsubscribe_project_id,
+                    },
+                    "timestamp": datetime.utcnow().isoformat()
+                })
 
             elif message_type == "broadcast":
                 # Broadcast message to project (if authorized)

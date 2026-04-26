@@ -1044,7 +1044,7 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Brain className="w-5 h-5 text-purple-600" />
-                Technical AI Console
+                Data Scientist Console
               </CardTitle>
               <CardDescription>
                 Advanced AI capabilities for technical users - code generation, debugging, and optimization
@@ -1055,7 +1055,7 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
                 <Brain className="w-16 h-16 mx-auto mb-4 text-purple-600" />
                 <h3 className="text-lg font-semibold mb-2">Advanced AI Console Coming Soon</h3>
                 <p className="text-gray-600 mb-6">
-                  Technical AI agent with multi-provider support, code generation, debugging assistance, and performance optimization.
+                  Data Scientist agent with multi-provider support, code generation, debugging assistance, and performance optimization.
                 </p>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 max-w-2xl mx-auto">
                   <div className="p-4 bg-blue-50 rounded-lg">

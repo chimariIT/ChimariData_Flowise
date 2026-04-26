@@ -467,11 +467,15 @@ class AnalysisOrchestrator:
             "answers": answers
         }
 
-        # Generate PDF report (placeholder)
-        artifacts["report_pdf"] = f"artifacts/{context.project_id}_report.pdf"
-
-        # Generate PowerPoint (placeholder)
-        artifacts["presentation"] = f"artifacts/{context.project_id}_presentation.pptx"
+        # Artifact export is not fabricated: report/presentation are only marked available
+        # when a real generator has produced persisted files.
+        artifacts["report_pdf"] = None
+        artifacts["presentation"] = None
+        artifacts["artifact_status"] = {
+            "report_pdf": "not_generated",
+            "presentation": "not_generated",
+            "reason": "No report export generator is configured in this environment.",
+        }
 
         logger.info(f"Generated artifacts for project {context.project_id}")
 
